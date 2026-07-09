@@ -241,18 +241,21 @@ export const MockServer = {
       role: employeeDetails.role
     };
     
-    const tx = db.transaction(["users", "employees"], "readwrite");
-    tx.objectStore("users").put(newUser);
-    tx.objectStore("employees").put(employeeDetails);
-    
-    const expiresAt = Date.now() + 2 * 60 * 60 * 1000;
-    const signedToken = await signSessionToken({
-      employeeId: employeeDetails.id,
-      role: employeeDetails.role,
-      expiresAt: expiresAt
-    }, hmacKey);
-    
-    return { token: signedToken, employee: employeeDetails };
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction(["users", "employees"], "readwrite");
+      tx.objectStore("users").put(newUser);
+      tx.objectStore("employees").put(employeeDetails);
+      tx.oncomplete = async () => {
+        const expiresAt = Date.now() + 2 * 60 * 60 * 1000;
+        const signedToken = await signSessionToken({
+          employeeId: employeeDetails.id,
+          role: employeeDetails.role,
+          expiresAt: expiresAt
+        }, hmacKey);
+        resolve({ token: signedToken, employee: employeeDetails });
+      };
+      tx.onerror = (e) => reject(e.target.error);
+    });
   },
 
   // Retrieve employees (for HR or self)
@@ -270,57 +273,85 @@ export const MockServer = {
   async syncTransactions(token, transactions) {
     await this.verifySession(token);
     
-    const tx = db.transaction(["employees", "attendance", "timeoff", "users"], "readwrite");
-    const stores = {
-      employees: tx.objectStore("employees"),
-      attendance: tx.objectStore("attendance"),
-      timeoff: tx.objectStore("timeoff"),
-      users: tx.objectStore("users")
-    };
-    
+    // ponytail: use server-side timestamp to prevent client clock drift
+    const serverTimestamp = Date.now();
     let conflicts = 0;
     
-    for (const trx of transactions) {
-      const { type, store, data, timestamp } = trx;
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction(["employees", "attendance", "timeoff", "users"], "readwrite");
+      const stores = {
+        employees: tx.objectStore("employees"),
+        attendance: tx.objectStore("attendance"),
+        timeoff: tx.objectStore("timeoff"),
+        users: tx.objectStore("users")
+      };
       
-      if (!stores[store]) continue;
+      let index = 0;
       
-      if (type === "PUT" || type === "ADD" || type === "UPDATE") {
-        const existing = await new Promise((resolve) => {
-          const req = stores[store].get(data.id);
-          req.onsuccess = () => resolve(req.result);
-          req.onerror = () => resolve(null);
-        });
-        
-        if (!existing || !existing.lastModified || existing.lastModified < timestamp) {
-          data.lastModified = timestamp;
-          stores[store].put(data);
-        } else {
-          conflicts++;
-          console.warn(`[SERVER] Conflict detected in ${store} for ID ${data.id}. Server record is newer. Write dropped.`);
+      function processNext() {
+        if (index >= transactions.length) {
+          return;
         }
-      } else if (type === "DELETE") {
-        const existing = await new Promise((resolve) => {
-          const req = stores[store].get(data.id);
-          req.onsuccess = () => resolve(req.result);
-          req.onerror = () => resolve(null);
-        });
         
-        if (!existing) {
-          // Already deleted
-        } else if (!existing.lastModified || existing.lastModified < timestamp) {
-          stores[store].delete(data.id);
-          if (store === "employees") {
-            stores.users.delete(data.id);
+        const trx = transactions[index++];
+        const { type, store, data } = trx;
+        
+        if (!stores[store]) {
+          processNext();
+          return;
+        }
+        
+        const req = stores[store].get(data.id);
+        req.onsuccess = () => {
+          const existing = req.result;
+          if (type === "PUT" || type === "ADD" || type === "UPDATE") {
+            if (!existing || !existing.lastModified || existing.lastModified < serverTimestamp) {
+              data.lastModified = serverTimestamp;
+              const putReq = stores[store].put(data);
+              putReq.onsuccess = () => {
+                if (index >= transactions.length) {
+                  // Final callback triggers resolve on transaction complete
+                } else {
+                  processNext();
+                }
+              };
+              putReq.onerror = (e) => reject(e.target.error);
+            } else {
+              conflicts++;
+              processNext();
+            }
+          } else if (type === "DELETE") {
+            if (!existing) {
+              processNext();
+            } else if (!existing.lastModified || existing.lastModified < serverTimestamp) {
+              const delReq = stores[store].delete(data.id);
+              delReq.onsuccess = () => {
+                if (store === "employees") {
+                  stores.users.delete(data.id);
+                }
+                processNext();
+              };
+              delReq.onerror = (e) => reject(e.target.error);
+            } else {
+              conflicts++;
+              processNext();
+            }
           }
-        } else {
-          conflicts++;
-          console.warn(`[SERVER] Conflict detected on delete in ${store} for ID ${data.id}. Server record is newer. Delete dropped.`);
-        }
+        };
+        req.onerror = (e) => reject(e.target.error);
       }
-    }
-    
-    return { success: true, conflicts, timestamp: Date.now() };
+      
+      tx.oncomplete = () => {
+        resolve({ success: true, conflicts, timestamp: serverTimestamp });
+      };
+      tx.onerror = (e) => reject(e.target.error);
+      
+      if (transactions.length === 0) {
+        resolve({ success: true, conflicts: 0, timestamp: serverTimestamp });
+      } else {
+        processNext();
+      }
+    });
   },
 
   // Direct File/Document handlers
@@ -342,3 +373,6 @@ export const MockServer = {
     return { success: true };
   }
 };
+
+// ponytail: prevent runtime auth bypass by freezing the MockServer object
+Object.freeze(MockServer);

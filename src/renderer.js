@@ -92,33 +92,19 @@ export function patchAppDOM(targetEl, htmlValue) {
   templateParser.innerHTML = "";
 }
 
-// Setup Element proxy helper without modifying global Element.prototype
+// ponytail: avoid document.getElementById prototype pollution; patch the #app instance property directly.
 export function initDOMRenderer() {
-  const originalGetElementById = document.getElementById;
-  
-  document.getElementById = function (id) {
-    const element = originalGetElementById.call(document, id);
-    if (id === "app" && element) {
-      // Return a Proxy intercepting DOM operations on the app container
-      return new Proxy(element, {
-        set(target, property, value) {
-          if (property === "innerHTML") {
-            patchAppDOM(target, value);
-            return true;
-          }
-          target[property] = value;
-          return true;
-        },
-        get(target, property) {
-          // Bind function contexts correctly
-          const val = target[property];
-          if (typeof val === "function") {
-            return val.bind(target);
-          }
-          return val;
-        }
-      });
-    }
-    return element;
-  };
+  const el = document.getElementById("app");
+  if (el) {
+    const originalDescriptor = Object.getOwnPropertyDescriptor(Element.prototype, "innerHTML");
+    Object.defineProperty(el, "innerHTML", {
+      set(value) {
+        patchAppDOM(this, value);
+      },
+      get() {
+        return originalDescriptor.get.call(this);
+      },
+      configurable: true
+    });
+  }
 }

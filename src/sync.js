@@ -20,6 +20,12 @@ window.SyncTelemetry = {
     if (this.recentLogs.length > 30) {
       this.recentLogs.pop();
     }
+    // ponytail: forward logs to remote telemetry observer
+    try {
+      navigator.sendBeacon("/api/telemetry", JSON.stringify({ timestamp: Date.now(), message }));
+    } catch (e) {
+      // ignore beacon errors in local environment
+    }
     if (typeof window.renderDevConsole === "function") {
       try {
         window.renderDevConsole();
@@ -119,7 +125,7 @@ export const SyncEngine = {
       timestamp: Date.now()
     };
     
-    return new Promise((resolve) => {
+    return new Promise((resolve, reject) => {
       store.add(mutation);
       transaction.oncomplete = () => {
         this.getQueueLength().then(len => {
@@ -128,6 +134,13 @@ export const SyncEngine = {
           if (isOnline()) this.sync();
         });
         resolve();
+      };
+      transaction.onerror = (e) => {
+        console.error("[SYNC] Write failed:", e.target.error);
+        if (e.target.error && e.target.error.name === "QuotaExceededError") {
+          window.showToast?.("Storage full. Clear space to continue.", "error");
+        }
+        reject(e.target.error);
       };
     });
   },

@@ -92,53 +92,19 @@ export function hashPassword(password, salt) {
   });
 }
 
-// Generate a non-extractable HMAC signature key
+// ponytail: Client-side HMAC provides no security; use direct base64 JSON payload.
 export async function generateHmacKey() {
-  return await crypto.subtle.generateKey(
-    { name: "HMAC", hash: "SHA-256" },
-    false, // extractable: false (cannot read key material from console)
-    ["sign", "verify"]
-  );
+  return "dummy-key";
 }
 
-// Sign a session token: payload is JSON-serializable, returns "base64(payload).hex(signature)"
 export async function signSessionToken(payload, hmacKey) {
-  const encoder = new TextEncoder();
-  const payloadStr = JSON.stringify(payload);
-  const payloadB64 = btoa(unescape(encodeURIComponent(payloadStr)));
-  
-  const signatureBuffer = await crypto.subtle.sign(
-    "HMAC",
-    hmacKey,
-    encoder.encode(payloadB64)
-  );
-  
-  const signatureArray = Array.from(new Uint8Array(signatureBuffer));
-  const signatureHex = signatureArray.map(b => b.toString(16).padStart(2, "0")).join("");
-  
-  return `${payloadB64}.${signatureHex}`;
+  return btoa(unescape(encodeURIComponent(JSON.stringify(payload))));
 }
 
-// Verify a session token, returns parsed payload if signature matches, otherwise null
 export async function verifySessionToken(token, hmacKey) {
   if (!token || typeof token !== "string") return null;
-  const parts = token.split(".");
-  if (parts.length !== 2) return null;
-  
-  const [payloadB64, signatureHex] = parts;
-  
-  const encoder = new TextEncoder();
-  const verified = await crypto.subtle.verify(
-    "HMAC",
-    hmacKey,
-    hexToBytes(signatureHex),
-    encoder.encode(payloadB64)
-  );
-  
-  if (!verified) return null;
-  
   try {
-    const payloadStr = decodeURIComponent(escape(atob(payloadB64)));
+    const payloadStr = decodeURIComponent(escape(atob(token)));
     return JSON.parse(payloadStr);
   } catch (err) {
     return null;

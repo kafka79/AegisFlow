@@ -49,6 +49,13 @@ function saveLocalFile(id, blob, callback) {
     const store = tx.objectStore("files");
     store.put({ id: id, data: blob });
     tx.oncomplete = () => { if (callback) callback(); };
+    tx.onerror = (e) => {
+      console.error("Local file save failed:", e.target.error);
+      if (e.target.error && e.target.error.name === "QuotaExceededError") {
+        window.showToast?.("Storage full. Could not save file.", "error");
+      }
+      if (callback) callback();
+    };
   } catch (e) {
     console.error("Local file save failed", e);
     if (callback) callback();
@@ -292,7 +299,8 @@ store.updateEmployee = function (id, fields) {
 store.addEmployee = function (emp, password) {
   const year = new Date(emp.dateOfJoining).getFullYear();
   const yearEmps = this.state.employees.filter(e => new Date(e.dateOfJoining).getFullYear() === year);
-  const nextSerial = String(yearEmps.length + 1).padStart(4, "0");
+  // ponytail: randomize to prevent offline collision
+  const nextSerial = Math.random().toString(36).substring(2, 6).toUpperCase();
   const nameParts = emp.name.trim().split(" ");
   const initialsText = ((nameParts[0]?.[0] || "E") + (nameParts[nameParts.length - 1]?.[0] || "X")).toUpperCase();
   const generatedId = `ODI${initialsText}${year}${nextSerial}`;
@@ -568,7 +576,7 @@ window.handleSignupSubmit = async function (e) {
     router.navigate("dashboard");
     showToast("Workspace account registered successfully!", "success");
   } catch (err) {
-    alertDiv.innerHTML = `<div class="alert-banner alert-error">Registration failed: ${err.message}</div>`;
+    alertDiv.innerHTML = `<div class="alert-banner alert-error">Registration failed: ${text(err.message)}</div>`;
   }
 };
 
@@ -733,7 +741,7 @@ window.handleSignupSubmitOverrides = async function (event) {
     router.navigate("dashboard");
     showToast("Workspace profile registered and authenticated!", "success");
   } catch (err) {
-    alertDiv.innerHTML = `<div class="alert-banner alert-error">Registration failed: ${err.message}</div>`;
+    alertDiv.innerHTML = `<div class="alert-banner alert-error">Registration failed: ${text(err.message)}</div>`;
   }
 };
 

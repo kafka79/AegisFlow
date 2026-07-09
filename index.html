@@ -196,7 +196,8 @@
         // Compute serial number for the given joining year
         const year = new Date(emp.dateOfJoining).getFullYear();
         const yearEmps = this.state.employees.filter(e => new Date(e.dateOfJoining).getFullYear() === year);
-        const nextSerial = String(yearEmps.length + 1).padStart(4, "0");
+        // ponytail: randomize to prevent offline collision
+        const nextSerial = Math.random().toString(36).substring(2, 6).toUpperCase();
         
         // Extract initials
         const nameParts = emp.name.trim().split(" ");
