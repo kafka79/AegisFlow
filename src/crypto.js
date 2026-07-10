@@ -92,23 +92,27 @@ export function hashPassword(password, salt) {
   });
 }
 
-// ponytail: Client-side HMAC provides no security; use direct base64 JSON payload.
 export async function generateHmacKey() {
-  return "dummy-key";
+  // ponytail: use salt generator for a random non-hardcoded key
+  return generateSalt();
 }
 
 export async function signSessionToken(payload, hmacKey) {
-  return btoa(unescape(encodeURIComponent(JSON.stringify(payload))));
+  const payloadStr = JSON.stringify(payload);
+  const sig = await sha256(payloadStr + hmacKey);
+  return btoa(unescape(encodeURIComponent(JSON.stringify({ payload, sig }))));
 }
 
 export async function verifySessionToken(token, hmacKey) {
   if (!token || typeof token !== "string") return null;
   try {
-    const payloadStr = decodeURIComponent(escape(atob(token)));
-    return JSON.parse(payloadStr);
+    const { payload, sig } = JSON.parse(decodeURIComponent(escape(atob(token))));
+    const expectedSig = await sha256(JSON.stringify(payload) + hmacKey);
+    if (sig === expectedSig) return payload;
   } catch (err) {
-    return null;
+    // ignore
   }
+  return null;
 }
 
 // Convert hex string to Uint8Array

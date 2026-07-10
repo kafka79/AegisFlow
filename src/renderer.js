@@ -92,19 +92,12 @@ export function patchAppDOM(targetEl, htmlValue) {
   templateParser.innerHTML = "";
 }
 
-// ponytail: avoid document.getElementById prototype pollution; patch the #app instance property directly.
+// ponytail: use clean global renderApp function instead of prototype pollution
 export function initDOMRenderer() {
-  const el = document.getElementById("app");
-  if (el) {
-    const originalDescriptor = Object.getOwnPropertyDescriptor(Element.prototype, "innerHTML");
-    Object.defineProperty(el, "innerHTML", {
-      set(value) {
-        patchAppDOM(this, value);
-      },
-      get() {
-        return originalDescriptor.get.call(this);
-      },
-      configurable: true
-    });
-  }
+  window.renderApp = (value) => {
+    const el = document.getElementById("app");
+    if (el) {
+      patchAppDOM(el, value);
+    }
+  };
 }

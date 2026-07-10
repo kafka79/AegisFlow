@@ -225,18 +225,15 @@ function hookRouter() {
   router.handleRoute = function () {
     if (!clientDbReady) {
       clientDbReadyCallbacks.push(() => originalHandleRoute());
-      const appEl = document.getElementById("app");
-      if (appEl) {
-        appEl.innerHTML = `
-          <div style="display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100vh; font-family: 'Outfit', sans-serif; background: #0b0f19; color: #fff;">
-            <div class="spinner" style="border: 4px solid rgba(255,255,255,0.1); border-top: 4px solid #6366f1; border-radius: 50%; width: 40px; height: 40px; animation: spin 1s linear infinite; margin-bottom: 16px;"></div>
-            <p style="color: var(--text-muted); font-size: 0.9rem;">Connecting to Secure Storage...</p>
-            <style>
-              @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
-            </style>
-          </div>
-        `;
-      }
+      window.renderApp(`
+        <div style="display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100vh; font-family: 'Outfit', sans-serif; background: #0b0f19; color: #fff;">
+          <div class="spinner" style="border: 4px solid rgba(255,255,255,0.1); border-top: 4px solid #6366f1; border-radius: 50%; width: 40px; height: 40px; animation: spin 1s linear infinite; margin-bottom: 16px;"></div>
+          <p style="color: var(--text-muted); font-size: 0.9rem;">Connecting to Secure Storage...</p>
+          <style>
+            @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+          </style>
+        </div>
+      `);
       return;
     }
     originalHandleRoute();
@@ -299,8 +296,8 @@ store.updateEmployee = function (id, fields) {
 store.addEmployee = function (emp, password) {
   const year = new Date(emp.dateOfJoining).getFullYear();
   const yearEmps = this.state.employees.filter(e => new Date(e.dateOfJoining).getFullYear() === year);
-  // ponytail: randomize to prevent offline collision
-  const nextSerial = Math.random().toString(36).substring(2, 6).toUpperCase();
+  // ponytail: secure UUID fragment to prevent collisions
+  const nextSerial = crypto.randomUUID().replace(/-/g, "").substring(0, 12).toUpperCase();
   const nameParts = emp.name.trim().split(" ");
   const initialsText = ((nameParts[0]?.[0] || "E") + (nameParts[nameParts.length - 1]?.[0] || "X")).toUpperCase();
   const generatedId = `ODI${initialsText}${year}${nextSerial}`;
@@ -583,9 +580,8 @@ window.handleSignupSubmit = async function (e) {
 let pendingSignup = null;
 
 window.renderSignupView = function () {
-  const app = document.getElementById("app");
   pendingSignup = null;
-  app.innerHTML = `
+  window.renderApp(`
     <div class="auth-wrapper">
       <div class="auth-card glass glow-accent animate-fade">
         <div class="auth-header">
@@ -852,7 +848,7 @@ window.renderEmployeesView = async function () {
     </div>
   `;
   
-  document.getElementById("app").innerHTML = `
+  window.renderApp(`
     ${getSidebarHTML("employees")}
     <div class="main-wrapper">
       ${getHeaderHTML(isAdmin ? "Employee Directory" : "My Employee Record")}
@@ -860,7 +856,7 @@ window.renderEmployeesView = async function () {
         ${content}
       </div>
     </div>
-  `;
+  `);
 };
 
 window.filterEmployees = function () {
@@ -1015,7 +1011,7 @@ window.handlePasswordUpdate = async function (e, empId) {
   }
 
   // Update password in local state
-  userAccount.password = newPass;
+  userAccount.password = await sha256(newPass);
   store.saveState();
   
   // Submit password change transaction to Mock Server
@@ -1157,7 +1153,7 @@ window.renderAttendanceView = async function () {
     </div>
   `;
 
-  document.getElementById("app").innerHTML = `
+  window.renderApp(`
     ${getSidebarHTML("attendance")}
     <div class="main-wrapper">
       ${getHeaderHTML("Attendance logs")}
@@ -1165,7 +1161,7 @@ window.renderAttendanceView = async function () {
         ${attendanceViewMode === "weekly" ? weeklyTable : dailyTable}
       </div>
     </div>
-  `;
+  `);
 };
 
 window.filterAdminAttendance = function () {

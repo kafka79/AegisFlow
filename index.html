@@ -20,6 +20,21 @@
     // ==========================================
     let selectedCalendarDate = new Date();
 
+    // ponytail: fallback renderer
+    window.renderApp = (value) => {
+      const el = document.getElementById("app");
+      if (el) el.innerHTML = value;
+    };
+
+    // ponytail: sha256 helper for client-side hashing
+    async function sha256(text) {
+      const encoder = new TextEncoder();
+      const data = encoder.encode(text);
+      const hashBuffer = await crypto.subtle.digest("SHA-256", data);
+      const hashArray = Array.from(new Uint8Array(hashBuffer));
+      return hashArray.map(b => b.toString(16).padStart(2, "0")).join("");
+    }
+
     // ==========================================
     // 1. STATE & STORAGE ENGINE
     // ==========================================
@@ -147,9 +162,9 @@
         this.loadState();
         if (this.state.users.length === 0) {
           this.state.users = [
-            { email: "admin@odoo.com", password: "admin123", employeeId: "ODIAD20260001", role: "HR" },
-            { email: "john.doe@odoo.com", password: "password123", employeeId: "ODIJD20260002", role: "Employee" },
-            { email: "alice.smith@odoo.com", password: "password123", employeeId: "ODIAS20260003", role: "Employee" }
+            { email: "admin@odoo.com", password: "240be518fabd87c0e14a77a94413e11dd2cdc01a02b11f4682c3c9213197607a", employeeId: "ODIAD20260001", role: "HR" },
+            { email: "john.doe@odoo.com", password: "ef92b778bafe771e89245b89ecbc08a44a4e166c06659911881f383d4473e94f", employeeId: "ODIJD20260002", role: "Employee" },
+            { email: "alice.smith@odoo.com", password: "ef92b778bafe771e89245b89ecbc08a44a4e166c06659911881f383d4473e94f", employeeId: "ODIAS20260003", role: "Employee" }
           ];
           this.state.employees = INITIAL_EMPLOYEES;
           this.state.attendance = INITIAL_ATTENDANCE;
@@ -192,12 +207,12 @@
         return false;
       }
 
-      addEmployee(emp, password) {
+      async addEmployee(emp, password) {
         // Compute serial number for the given joining year
         const year = new Date(emp.dateOfJoining).getFullYear();
         const yearEmps = this.state.employees.filter(e => new Date(e.dateOfJoining).getFullYear() === year);
-        // ponytail: randomize to prevent offline collision
-        const nextSerial = Math.random().toString(36).substring(2, 6).toUpperCase();
+        // ponytail: secure UUID fragment to prevent collisions
+        const nextSerial = crypto.randomUUID().replace(/-/g, "").substring(0, 12).toUpperCase();
         
         // Extract initials
         const nameParts = emp.name.trim().split(" ");
@@ -212,7 +227,7 @@
         this.state.employees.push(emp);
         this.state.users.push({
           email: emp.email,
-          password: password,
+          password: await sha256(password),
           employeeId: generatedId,
           role: emp.role
         });
@@ -554,8 +569,7 @@
     // 5. AUTHENTICATION VIEWS (LOGIN / SIGNUP)
     // ==========================================
     function renderLoginView() {
-      const app = document.getElementById("app");
-      app.innerHTML = `
+      window.renderApp(`
         <div class="auth-wrapper">
           <div class="auth-card glass glow-accent animate-fade">
             <div class="auth-header">
@@ -587,18 +601,19 @@
             </div>
           </div>
         </div>
-      `;
+      `);
     }
 
-    function handleLoginSubmit(e) {
+    async function handleLoginSubmit(e) {
       e.preventDefault();
       const loginVal = document.getElementById("login-email").value.trim();
       const passVal = document.getElementById("login-password").value;
       const alertDiv = document.getElementById("login-alert");
 
+      const passHash = await sha256(passVal);
       const userAccount = store.state.users.find(u => 
         (u.email.toLowerCase() === loginVal.toLowerCase() || u.employeeId.toLowerCase() === loginVal.toLowerCase()) 
-        && u.password === passVal
+        && u.password === passHash
       );
 
       if (userAccount) {
@@ -618,8 +633,7 @@
     }
 
     function renderSignupView() {
-      const app = document.getElementById("app");
-      app.innerHTML = `
+      window.renderApp(`
         <div class="auth-wrapper">
           <div class="auth-card glass glow-accent animate-fade">
             <div class="auth-header">
@@ -644,13 +658,13 @@
               </div>
 
               <div class="form-group">
-                <label for="admin-email">Admin Corporate Email</label>
-                <input class="input-ctrl" type="email" id="admin-email" required placeholder="hr.admin@company.com">
+                <label for="admin-email">Corporate Email Address</label>
+                <input class="input-ctrl" type="email" id="admin-email" required placeholder="admin@odoo.com">
               </div>
 
               <div class="form-group">
                 <label for="admin-password">Password</label>
-                <input class="input-ctrl" type="password" id="admin-password" required placeholder="Min 6 characters">
+                <input class="input-ctrl" type="password" id="admin-password" required placeholder="••••••••">
               </div>
 
               <div class="form-group">
@@ -666,7 +680,7 @@
             </div>
           </div>
         </div>
-      `;
+      `);
     }
 
     function handleSignupSubmit(e) {
@@ -965,7 +979,7 @@
         `;
       }
 
-      app.innerHTML = `
+      window.renderApp(`
         ${sidebarHTML}
         <div class="main-wrapper">
           ${headerHTML}
@@ -973,7 +987,7 @@
             ${dashboardContent}
           </div>
         </div>
-      `;
+      `);
 
       // Start ticking clock on UI
       startDashboardClock();
@@ -1028,14 +1042,13 @@
     // ==========================================
     function renderEmployeesView() {
       const user = store.getCurrentUser();
-      const app = document.getElementById("app");
       const sidebarHTML = getSidebarHTML("employees");
       const headerHTML = getHeaderHTML("Employee Directory");
       
       const isAdmin = user.role === "HR";
       const employees = store.state.employees;
 
-      app.innerHTML = `
+      window.renderApp(`
         ${sidebarHTML}
         <div class="main-wrapper">
           ${headerHTML}
@@ -1058,7 +1071,7 @@
             </div>
           </div>
         </div>
-      `;
+      `);
     }
 
     function getEmployeeCardHTML(emp) {
@@ -1264,7 +1277,7 @@
       const initials = emp.name.split(" ").map(n => n[0]).join("").substring(0, 2).toUpperCase();
       const avatarSrc = emp.avatar || `data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100"><circle cx="50" cy="50" r="50" fill="%236366f1"/><text x="50" y="55" font-family="'Outfit', sans-serif" font-size="32" font-weight="700" fill="white" text-anchor="middle" dominant-baseline="middle">${initials}</text></svg>`;
 
-      app.innerHTML = `
+      window.renderApp(`
         ${sidebarHTML}
         <div class="main-wrapper">
           ${headerHTML}
@@ -1466,7 +1479,7 @@
             </div>
           </div>
         </div>
-      `;
+      `);
 
       // Draw active salary breakdown details
       recalculateSalaryDisplay();
@@ -1611,7 +1624,7 @@
       alert("Banking & Compensation criteria updated!");
     }
 
-    function handlePasswordUpdate(e, empId) {
+    async function handlePasswordUpdate(e, empId) {
       e.preventDefault();
       const current = document.getElementById("current-password").value;
       const newPass = document.getElementById("new-password-input").value;
@@ -1619,7 +1632,8 @@
 
       const userAccount = store.state.users.find(u => u.employeeId === empId);
 
-      if (userAccount.password !== current) {
+      const currentHash = await sha256(current);
+      if (userAccount.password !== currentHash) {
         alert("The current password entered is incorrect!");
         return;
       }
@@ -1634,7 +1648,7 @@
         return;
       }
 
-      userAccount.password = newPass;
+      userAccount.password = await sha256(newPass);
       store.saveState();
       
       document.getElementById("profile-security-form").reset();
@@ -1751,7 +1765,7 @@
         `;
       }
 
-      app.innerHTML = `
+      window.renderApp(`
         ${sidebarHTML}
         <div class="main-wrapper">
           ${headerHTML}
@@ -1759,7 +1773,7 @@
             ${attendanceContent}
           </div>
         </div>
-      `;
+      `);
     }
 
     function filterAdminAttendance() {
@@ -1970,7 +1984,7 @@
         `;
       }
 
-      app.innerHTML = `
+      window.renderApp(`
         ${sidebarHTML}
         <div class="main-wrapper">
           ${headerHTML}
@@ -1978,7 +1992,7 @@
             ${timeOffContent}
           </div>
         </div>
-      `;
+      `);
     }
 
     function changeCalendarMonth(offset) {
@@ -2335,7 +2349,7 @@
         `;
       }
 
-      app.innerHTML = `
+      window.renderApp(`
         ${sidebarHTML}
         <div class="main-wrapper">
           ${headerHTML}
@@ -2343,7 +2357,7 @@
             ${payrollContent}
           </div>
         </div>
-      `;
+      `);
     }
 
     function calculateMonthlyPayroll(emp, targetYear = new Date().getFullYear(), targetMonth = new Date().getMonth()) {

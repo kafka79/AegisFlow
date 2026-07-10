@@ -20,11 +20,13 @@ window.SyncTelemetry = {
     if (this.recentLogs.length > 30) {
       this.recentLogs.pop();
     }
-    // ponytail: forward logs to remote telemetry observer
-    try {
-      navigator.sendBeacon("/api/telemetry", JSON.stringify({ timestamp: Date.now(), message }));
-    } catch (e) {
-      // ignore beacon errors in local environment
+    // ponytail: only send beacon in production environments to avoid console spam
+    if (window.location.hostname !== "localhost" && window.location.hostname !== "127.0.0.1" && window.location.protocol !== "file:") {
+      try {
+        navigator.sendBeacon("/api/telemetry", JSON.stringify({ timestamp: Date.now(), message }));
+      } catch (e) {
+        // ignore beacon errors
+      }
     }
     if (typeof window.renderDevConsole === "function") {
       try {

@@ -252,6 +252,13 @@ function formatTime(timestamp) {
 // Expose same lifecycle interface for app bootstrap overrides compatibility
 export const MockEmailService = {
   init() {
+    // ponytail: only load developer panel in local dev sandbox
+    const isDev = new URLSearchParams(window.location.search).has("dev") || ["localhost", "127.0.0.1"].includes(window.location.hostname) || window.location.protocol === "file:";
+    if (!isDev) {
+      const container = document.getElementById("mock-inbox-container");
+      if (container) container.style.display = "none";
+      return;
+    }
     injectConsoleStyles();
     renderDevConsole();
     

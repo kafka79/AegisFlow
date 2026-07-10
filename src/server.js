@@ -318,7 +318,11 @@ export const MockServer = {
               putReq.onerror = (e) => reject(e.target.error);
             } else {
               conflicts++;
-              processNext();
+              // ponytail: resolve merge conflict by merging non-overlapping fields, server wins on overlap
+              const merged = { ...data, ...existing, lastModified: existing.lastModified || serverTimestamp };
+              const putReq = stores[store].put(merged);
+              putReq.onsuccess = () => processNext();
+              putReq.onerror = (e) => reject(e.target.error);
             }
           } else if (type === "DELETE") {
             if (!existing) {
