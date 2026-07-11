@@ -100,7 +100,7 @@ export const MockServer = {
     const users = await getStoreAll("users");
     if (users.length === 0) {
       const salt = generateSalt();
-      const adminPassHash = await hashPassword(await sha256("admin123"), salt);
+      const adminPassHash = await hashPassword(await sha256("Admin@1234"), salt);
       
       const adminUser = {
         employeeId: "ODIAD20260001",
@@ -271,7 +271,7 @@ export const MockServer = {
 
   // Cloud Sync Handler - accepts mutation transactions from the client sync queue
   async syncTransactions(token, transactions) {
-    await this.verifySession(token);
+    const session = await this.verifySession(token);
     
     // ponytail: use server-side timestamp to prevent client clock drift
     const serverTimestamp = Date.now();
@@ -301,9 +301,79 @@ export const MockServer = {
           return;
         }
         
-        const req = stores[store].get(data.id);
+        // Key path resolution: 'users' uses employeeId, others use id
+        const key = store === "users" ? data.employeeId : data.id;
+        if (!key) {
+          processNext();
+          return;
+        }
+        
+        const req = stores[store].get(key);
         req.onsuccess = () => {
           const existing = req.result;
+          
+          // Role-Based Access Control Checks
+          if (session.role !== "HR") {
+            if (store === "employees") {
+              // Non-HR can only modify their own employee record
+              if (key !== session.employeeId) {
+                console.warn(`[SERVER] Auth Block: Non-HR user ${session.employeeId} attempted to modify employee ${key}`);
+                processNext();
+                return;
+              }
+              // Prevent non-HR from updating restricted fields
+              if (existing) {
+                data.role = existing.role;
+                data.department = existing.department;
+                data.manager = existing.manager;
+                data.wage = existing.wage;
+                data.location = existing.location;
+                data.dateOfJoining = existing.dateOfJoining;
+                data.ptoDays = existing.ptoDays;
+                data.sickDays = existing.sickDays;
+              } else {
+                // Non-HR cannot add new employee records
+                processNext();
+                return;
+              }
+            } else if (store === "users") {
+              // Non-HR can only update their own credentials
+              if (key !== session.employeeId) {
+                console.warn(`[SERVER] Auth Block: Non-HR user ${session.employeeId} attempted to modify user credentials of ${key}`);
+                processNext();
+                return;
+              }
+              if (existing) {
+                data.role = existing.role;
+              } else {
+                processNext();
+                return;
+              }
+            } else if (store === "attendance") {
+              // Non-HR can only check-in/out for themselves
+              if (data.employeeId !== session.employeeId) {
+                console.warn(`[SERVER] Auth Block: Non-HR user ${session.employeeId} attempted to modify attendance of ${data.employeeId}`);
+                processNext();
+                return;
+              }
+            } else if (store === "timeoff") {
+              // Non-HR can only create/edit their own leave requests
+              if (data.employeeId !== session.employeeId) {
+                console.warn(`[SERVER] Auth Block: Non-HR user ${session.employeeId} attempted to modify timeoff request of ${data.employeeId}`);
+                processNext();
+                return;
+              }
+              // Prevent self-approval of leaves and editing of admin comment
+              if (existing) {
+                data.status = existing.status;
+                data.comment = existing.comment;
+              } else {
+                data.status = "Pending";
+                data.comment = "";
+              }
+            }
+          }
+          
           if (type === "PUT" || type === "ADD" || type === "UPDATE") {
             if (!existing || !existing.lastModified || existing.lastModified < serverTimestamp) {
               data.lastModified = serverTimestamp;
@@ -325,13 +395,20 @@ export const MockServer = {
               putReq.onerror = (e) => reject(e.target.error);
             }
           } else if (type === "DELETE") {
+            // Delete check
+            if (session.role !== "HR") {
+              // Non-HR cannot delete anything
+              console.warn(`[SERVER] Auth Block: Non-HR user ${session.employeeId} attempted to delete a record in store ${store}`);
+              processNext();
+              return;
+            }
             if (!existing) {
               processNext();
             } else if (!existing.lastModified || existing.lastModified < serverTimestamp) {
-              const delReq = stores[store].delete(data.id);
+              const delReq = stores[store].delete(key);
               delReq.onsuccess = () => {
                 if (store === "employees") {
-                  stores.users.delete(data.id);
+                  stores.users.delete(key);
                 }
                 processNext();
               };

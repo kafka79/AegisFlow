@@ -23,7 +23,14 @@ window.SyncTelemetry = {
     // ponytail: only send beacon in production environments to avoid console spam
     if (window.location.hostname !== "localhost" && window.location.hostname !== "127.0.0.1" && window.location.protocol !== "file:") {
       try {
-        navigator.sendBeacon("/api/telemetry", JSON.stringify({ timestamp: Date.now(), message }));
+        // Redact PII (corporate emails and corporate employee IDs)
+        const sanitizedMsg = String(message || "")
+          .replace(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g, "[EMAIL]")
+          .replace(/ODI[A-Z0-9]+/gi, "[ID]");
+          
+        const payload = JSON.stringify({ timestamp: Date.now(), message: sanitizedMsg });
+        const blob = new Blob([payload], { type: "application/json" });
+        navigator.sendBeacon("/api/telemetry", blob);
       } catch (e) {
         // ignore beacon errors
       }
@@ -96,12 +103,29 @@ export const SyncEngine = {
       this.getQueueLength().then(len => notifyStatus("offline", len));
     });
     
-    // Background retry loop
-    setInterval(() => {
-      if (isOnline() && !isSyncing) {
-        this.sync();
-      }
-    }, 15000);
+    // Background retry loop with exponential backoff on failure
+    let syncIntervalMs = 15000;
+    let syncTimeout = null;
+    
+    const runBackgroundSync = () => {
+      if (syncTimeout) clearTimeout(syncTimeout);
+      syncTimeout = setTimeout(() => {
+        if (isOnline() && !isSyncing) {
+          this.sync().then((success) => {
+            if (success) {
+              syncIntervalMs = 15000; // Reset backoff on success
+            } else {
+              syncIntervalMs = Math.min(syncIntervalMs * 2, 300000); // Backoff up to 5 min
+            }
+            runBackgroundSync();
+          });
+        } else {
+          runBackgroundSync();
+        }
+      }, syncIntervalMs);
+    };
+    
+    runBackgroundSync();
   },
 
   // Listen to changes in synchronization status
@@ -187,12 +211,12 @@ export const SyncEngine = {
 
   // Flush local transaction logs to backend server
   async sync() {
-    if (isSyncing || !isOnline()) return;
+    if (isSyncing || !isOnline()) return false;
     
     const pending = await this.getPendingTransactions();
     if (pending.length === 0) {
       notifyStatus("online", 0);
-      return;
+      return true;
     }
     
     isSyncing = true;
@@ -215,7 +239,7 @@ export const SyncEngine = {
       isSyncing = false;
       window.SyncTelemetry.log("Sync abort: No active authenticated session token found.");
       this.getQueueLength().then(len => notifyStatus("offline", len));
-      return;
+      return false;
     }
     
     try {
@@ -236,12 +260,14 @@ export const SyncEngine = {
       console.log(`[SYNC] Successfully synchronized ${pending.length} transactions to cloud database.`);
       
       notifyStatus("online", 0);
+      return true;
     } catch (err) {
       window.SyncTelemetry.failureCount++;
       window.SyncTelemetry.log(`Sync failure: ${err.message || err}`);
       console.error("[SYNC] Synchronization error:", err);
       // Wait for next timer cycle or status change
       this.getQueueLength().then(len => notifyStatus("offline", len));
+      return false;
     } finally {
       isSyncing = false;
     }

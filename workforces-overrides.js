@@ -293,9 +293,8 @@ store.updateEmployee = function (id, fields) {
   return false;
 };
 
-store.addEmployee = function (emp, password) {
+store.addEmployee = async function (emp, password) {
   const year = new Date(emp.dateOfJoining).getFullYear();
-  const yearEmps = this.state.employees.filter(e => new Date(e.dateOfJoining).getFullYear() === year);
   // ponytail: secure UUID fragment to prevent collisions
   const nextSerial = crypto.randomUUID().replace(/-/g, "").substring(0, 12).toUpperCase();
   const nameParts = emp.name.trim().split(" ");
@@ -308,22 +307,19 @@ store.addEmployee = function (emp, password) {
   emp.sickDays = 15;
   emp.documents = [];
   
+  // Register in Mock Backend Server Database first
+  const sessionToken = store.state.currentSession ? store.state.currentSession.token : null;
+  const { token } = await MockServer.registerUser(emp, password, sessionToken);
+  
+  // Keep local session aligned if self
+  if (store.state.currentSession && store.state.currentSession.employeeId === emp.id) {
+    store.state.currentSession.token = token;
+  }
+  
   this.state.employees.push(emp);
   this.saveState();
   
-  // Register in Mock Backend Server Database and local Sync Queue
-  const sessionToken = store.state.currentSession ? store.state.currentSession.token : null;
-  MockServer.registerUser(emp, password, sessionToken).then(({ token }) => {
-    // Keep local session aligned
-    if (store.state.currentSession && store.state.currentSession.employeeId === emp.id) {
-      store.state.currentSession.token = token;
-      store.saveState();
-    }
-  }).catch(err => {
-    console.error("[SERVER] Registration failed:", err);
-  });
-  
-  SyncEngine.enqueue("ADD", "employees", emp);
+  await SyncEngine.enqueue("ADD", "employees", emp);
   return emp;
 };
 
@@ -1241,19 +1237,345 @@ window.showApplyLeaveModal = function () {
   if (start && end) calculateRequestedDays();
 };
 
-const originalRenderTimeOff = renderTimeOffView;
-window.renderTimeOffView = function () {
-  originalRenderTimeOff();
+window.downloadLeaveAttachment = function (empId, docId, docName) {
+  getLocalFile(docId, (data) => {
+    if (data) {
+      triggerDownload(data, docName);
+      return;
+    }
+    
+    // Attempt download from Mock Server if not in local IndexedDB
+    const stateStr = localStorage.getItem("workforces_state");
+    if (stateStr) {
+      try {
+        const state = JSON.parse(stateStr);
+        const token = state.currentSession ? state.currentSession.token : null;
+        if (token) {
+          MockServer.getDocument(token, docId).then(serverData => {
+            if (serverData) {
+              triggerDownload(serverData, docName);
+              // Save locally for future
+              saveLocalFile(docId, serverData);
+            } else {
+              showToast("Attachment not found on server or locally.", "error");
+            }
+          }).catch(err => {
+            showToast("Failed to fetch attachment from server: " + err.message, "error");
+          });
+        }
+      } catch (err) {
+        showToast("Error reading session for download.", "error");
+      }
+    }
+  });
+};
+
+function triggerDownload(data, filename) {
+  const url = (data instanceof Blob) ? URL.createObjectURL(data) : data;
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  if (data instanceof Blob) {
+    setTimeout(() => URL.revokeObjectURL(url), 100);
+  }
+  showToast("Downloading attachment...", "success");
+}
+
+window.handleLeaveSubmit = async function (e) {
+  e.preventDefault();
   const user = store.getCurrentUser();
-  if (!user || user.role === "HR") return;
-  const calendarHeader = document.querySelector(".calendar-header");
-  if (!calendarHeader || document.getElementById("leave-selection-actions")) return;
-  calendarHeader.insertAdjacentHTML("afterend", `
-    <div id="leave-selection-actions" class="leave-selection-actions animate-fade">
-      <span>${selectedLeaveRange.start ? `Selected: ${text(selectedLeaveRange.start)}${selectedLeaveRange.end ? " to " + text(selectedLeaveRange.end) : ""}` : "Select dates on the calendar for a leave range."}</span>
-      <button class="btn btn-secondary btn-sm" onclick="clearLeaveSelection()">Clear</button>
+  
+  const lType = document.getElementById("leave-type").value;
+  const start = document.getElementById("leave-start").value;
+  const end = document.getElementById("leave-end").value;
+  const remarks = document.getElementById("leave-remarks").value.trim();
+  const fileEl = document.getElementById("leave-file");
+
+  if (end < start) {
+    showToast("End Date cannot be before Start Date.", "error");
+    return;
+  }
+
+  const days = calculateDaysBetween(start, end);
+
+  if (lType === "Paid Time Off" && user.ptoDays < days) {
+    showToast(`Insufficient Paid Time Off balance! You have only ${user.ptoDays} days available.`, "error");
+    return;
+  }
+  if (lType === "Sick Leave" && user.sickDays < days) {
+    showToast(`Insufficient Sick Leave balance! You have only ${user.sickDays} days available.`, "error");
+    return;
+  }
+
+  if (lType === "Sick Leave" && fileEl.files.length === 0) {
+    showToast("Sick Leave requires a medical certificate upload.", "error");
+    return;
+  }
+
+  const leaveData = {
+    employeeId: user.id,
+    employeeName: user.name,
+    leaveType: lType,
+    startDate: start,
+    endDate: end,
+    remarks: remarks,
+    attachmentName: "",
+    attachmentId: ""
+  };
+
+  const submitBtn = e.target.querySelector('button[type="submit"]');
+  const originalText = submitBtn ? submitBtn.textContent : "";
+  if (submitBtn) {
+    submitBtn.disabled = true;
+    submitBtn.textContent = "Submitting...";
+  }
+
+  const completeSubmission = () => {
+    store.applyLeave(leaveData);
+    closeModal();
+    renderTimeOffView();
+    showToast("Leave request submitted successfully.", "success");
+  };
+
+  if (fileEl.files.length > 0) {
+    const file = fileEl.files[0];
+    if (file.size > 2 * 1024 * 1024) {
+      showToast("Attachment must be under 2 MB.", "error");
+      if (submitBtn) {
+        submitBtn.disabled = false;
+        submitBtn.textContent = originalText;
+      }
+      return;
+    }
+    const docId = "LVDOC-" + Date.now();
+    leaveData.attachmentName = file.name;
+    leaveData.attachmentId = docId;
+
+    saveLocalFile(docId, file, () => {
+      const stateStr = localStorage.getItem("workforces_state");
+      if (stateStr) {
+        try {
+          const state = JSON.parse(stateStr);
+          const token = state.currentSession ? state.currentSession.token : null;
+          if (token) {
+            MockServer.saveDocument(token, docId, file).then(() => {
+              completeSubmission();
+            }).catch(err => {
+              showToast("Server upload failed, saved locally: " + err.message, "warning");
+              completeSubmission();
+            });
+          } else {
+            completeSubmission();
+          }
+        } catch (err) {
+          completeSubmission();
+        }
+      } else {
+        completeSubmission();
+      }
+    });
+  } else {
+    completeSubmission();
+  }
+};
+
+window.renderTimeOffView = function () {
+  const user = store.getCurrentUser();
+  if (!user) return;
+  
+  const sidebarHTML = getSidebarHTML("timeoff");
+  const headerHTML = getHeaderHTML("Time Off & Leave Balance");
+  const isAdmin = user.role === "HR";
+  
+  let timeOffContent = "";
+  
+  if (isAdmin) {
+    const requests = store.state.timeOff;
+    timeOffContent = `
+      <div class="animate-fade">
+        <h3 style="margin-bottom: 20px; font-weight: 600;">Workforce Leave Requests</h3>
+        
+        <div class="data-table-container glass">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>Employee ID</th>
+                <th>Name</th>
+                <th>Type</th>
+                <th>Duration</th>
+                <th>Remarks</th>
+                <th>Attachment</th>
+                <th>Status</th>
+                <th>Action / Notes</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${requests.map(l => {
+                let fileLink = '<span style="color: var(--text-dim);">No Attachment</span>';
+                if (l.attachmentId) {
+                  fileLink = `<a onclick="downloadLeaveAttachment('${attr(l.employeeId)}', '${attr(l.attachmentId)}', '${attr(l.attachmentName)}')" style="color: var(--accent); font-weight: 600; text-decoration: none; cursor: pointer;">View File</a>`;
+                } else if (l.attachmentData) {
+                  fileLink = `<a href="${l.attachmentData}" download="${l.attachmentName}" style="color: var(--accent); font-weight: 600; text-decoration: none;">View File</a>`;
+                }
+                
+                let actionsHTML = "";
+                if (l.status === "Pending") {
+                  actionsHTML = `
+                    <div style="display: flex; gap: 8px;">
+                      <button class="btn btn-success btn-sm" onclick="showApproveCommentModal('${l.id}', 'Approved')">Approve</button>
+                      <button class="btn btn-danger btn-sm" onclick="showApproveCommentModal('${l.id}', 'Rejected')">Reject</button>
+                    </div>
+                  `;
+                } else {
+                  actionsHTML = `<span style="color: var(--text-dim); font-size: 0.85rem;">${text(l.comment || 'Processed')}</span>`;
+                }
+                
+                return `
+                  <tr>
+                    <td style="font-family: var(--font-mono); font-size: 0.85rem;">${text(l.employeeId)}</td>
+                    <td><strong>${text(l.employeeName)}</strong></td>
+                    <td>${text(l.leaveType)}</td>
+                    <td><strong>${text(l.startDate)}</strong> to <strong>${text(l.endDate)}</strong></td>
+                    <td>${text(l.remarks || '')}</td>
+                    <td>${fileLink}</td>
+                    <td>${statusBadge(l.status)}</td>
+                    <td>${actionsHTML}</td>
+                  </tr>
+                `;
+              }).join("") || `
+                <tr>
+                  <td colspan="8" style="text-align: center; color: var(--text-muted); padding: 32px;">
+                    No leave requests have been applied yet.
+                  </td>
+                </tr>
+              `}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    `;
+  } else {
+    const monthNames = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+    const monthLabel = `${monthNames[selectedCalendarDate.getMonth()]} ${selectedCalendarDate.getFullYear()}`;
+    
+    timeOffContent = `
+      <div class="animate-fade">
+        <div class="timeoff-header">
+          <div class="info-card glass glow-accent">
+            <div class="info-card-header">
+              <span>Paid Time Off (PTO)</span>
+              ${ICONS.timeoff}
+            </div>
+            <div class="info-card-val" style="color: var(--status-present);">${user.ptoDays} Days</div>
+            <div class="info-card-footer">General paid leave balance remaining</div>
+          </div>
+          <div class="info-card glass">
+            <div class="info-card-header">
+              <span>Sick Leave Balance</span>
+              ${ICONS.timeoff}
+            </div>
+            <div class="info-card-val" style="color: var(--accent);">${user.sickDays} Days</div>
+            <div class="info-card-footer">Allocated medical leave balance remaining</div>
+          </div>
+        </div>
+        
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 24px;">
+          <h3 style="font-weight: 600;">Calendar Overview</h3>
+          <button class="btn btn-primary" onclick="showApplyLeaveModal()">${ICONS.plus} Apply for Leave</button>
+        </div>
+        
+        <div class="glass" style="padding: 24px; margin-bottom: 32px;">
+          <div class="calendar-wrapper">
+            <div class="calendar-header">
+              <h4 style="font-weight: 600;" id="cal-month-title">${monthLabel}</h4>
+              <div style="display: flex; gap: 8px;">
+                <button class="calendar-nav-btn" onclick="changeCalendarMonth(-1)">&lt;</button>
+                <button class="calendar-nav-btn" onclick="changeCalendarMonth(1)">&gt;</button>
+              </div>
+            </div>
+            <div class="calendar-grid">
+              <div class="calendar-day-header">Sun</div>
+              <div class="calendar-day-header">Mon</div>
+              <div class="calendar-day-header">Tue</div>
+              <div class="calendar-day-header">Wed</div>
+              <div class="calendar-day-header">Thu</div>
+              <div class="calendar-day-header">Fri</div>
+              <div class="calendar-day-header">Sat</div>
+              ${renderCalendarDays(selectedCalendarDate.getFullYear(), selectedCalendarDate.getMonth())}
+            </div>
+          </div>
+        </div>
+        
+        <h3 style="margin-bottom: 16px; font-weight: 600;">Leave Requests Log</h3>
+        <div class="data-table-container glass">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>Type</th>
+                <th>Dates</th>
+                <th>Remarks</th>
+                <th>Attachment</th>
+                <th>Status</th>
+                <th>Approver Note</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${store.state.timeOff.filter(l => l.employeeId === user.id).map(l => {
+                let fileLink = '<span style="color: var(--text-dim);">No Attachment</span>';
+                if (l.attachmentId) {
+                  fileLink = `<a onclick="downloadLeaveAttachment('${attr(l.employeeId)}', '${attr(l.attachmentId)}', '${attr(l.attachmentName)}')" style="color: var(--accent); font-weight: 600; text-decoration: none; cursor: pointer;">View File</a>`;
+                } else if (l.attachmentData) {
+                  fileLink = `<a href="${l.attachmentData}" download="${l.attachmentName}" style="color: var(--accent); font-weight: 600; text-decoration: none;">View File</a>`;
+                }
+                
+                return `
+                  <tr>
+                    <td><strong>${text(l.leaveType)}</strong></td>
+                    <td>${text(l.startDate)} to ${text(l.endDate)}</td>
+                    <td>${text(l.remarks || '')}</td>
+                    <td>${fileLink}</td>
+                    <td>${statusBadge(l.status)}</td>
+                    <td style="color: var(--text-muted); font-size: 0.85rem;">${text(l.comment || '--')}</td>
+                  </tr>
+                `;
+              }).join("") || `
+                <tr>
+                  <td colspan="6" style="text-align: center; color: var(--text-muted); padding: 32px;">
+                    You have not submitted any leave requests yet.
+                  </td>
+                </tr>
+              `}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    `;
+  }
+  
+  window.renderApp(`
+    ${sidebarHTML}
+    <div class="main-wrapper">
+      ${headerHTML}
+      <div class="view-container">
+        ${timeOffContent}
+      </div>
     </div>
   `);
+  
+  if (!isAdmin) {
+    const calendarHeader = document.querySelector(".calendar-header");
+    if (calendarHeader && !document.getElementById("leave-selection-actions")) {
+      calendarHeader.insertAdjacentHTML("afterend", `
+        <div id="leave-selection-actions" class="leave-selection-actions animate-fade">
+          <span>${selectedLeaveRange.start ? `Selected: ${text(selectedLeaveRange.start)}${selectedLeaveRange.end ? " to " + text(selectedLeaveRange.end) : ""}` : "Select dates on the calendar for a leave range."}</span>
+          <button class="btn btn-secondary btn-sm" onclick="clearLeaveSelection()">Clear</button>
+        </div>
+      `);
+    }
+  }
 };
 
 // ==========================================
@@ -1353,17 +1675,64 @@ window.showOnboardModal = function () {
   }
 };
 
-const originalOnboardSubmit = window.handleOnboardSubmit;
-window.handleOnboardSubmit = function (event) {
+window.handleOnboardSubmit = async function (event) {
+  event.preventDefault();
   const password = document.getElementById("new-pass")?.value || "";
   const failures = passwordFailures(password);
   if (failures.length) {
-    event.preventDefault();
     showToast("Temporary password requirements: " + failures.join(", "), "error");
     return;
   }
-  if (originalOnboardSubmit) originalOnboardSubmit(event);
-  showToast("Employee onboarded successfully.", "success");
+  
+  const submitBtn = event.target.querySelector('button[type="submit"]');
+  const originalText = submitBtn ? submitBtn.textContent : "";
+  if (submitBtn) {
+    submitBtn.disabled = true;
+    submitBtn.textContent = "Onboarding...";
+  }
+
+  const newEmp = {
+    id: "",
+    name: document.getElementById("new-name").value.trim(),
+    email: document.getElementById("new-email").value.trim(),
+    phone: document.getElementById("new-phone").value.trim(),
+    role: document.getElementById("new-role").value,
+    department: document.getElementById("new-dept").value.trim(),
+    manager: document.getElementById("new-manager").value.trim(),
+    location: document.getElementById("new-location").value.trim(),
+    dateOfJoining: document.getElementById("new-doj").value,
+    wage: parseFloat(document.getElementById("new-wage").value),
+    dob: "1995-01-01",
+    address: "Provide address",
+    nationality: "Indian",
+    gender: "Male",
+    maritalStatus: "Single",
+    bankName: "TBD",
+    accountNo: "TBD",
+    ifsc: "TBD",
+    pan: "TBD",
+    avatar: ""
+  };
+
+  try {
+    const added = await store.addEmployee(newEmp, password);
+    closeModal();
+    
+    // Re-render directory
+    if (window.location.hash.substring(1) === "employees") {
+      renderEmployeesView();
+    } else {
+      router.navigate("employees");
+    }
+    showToast(`Employee onboarded successfully with ID: ${added.id}`, "success");
+  } catch (err) {
+    showToast(`Onboarding failed: ${err.message}`, "error");
+  } finally {
+    if (submitBtn) {
+      submitBtn.disabled = false;
+      submitBtn.textContent = originalText;
+    }
+  }
 };
 
 // avatar resolution

@@ -92,23 +92,78 @@ export function hashPassword(password, salt) {
   });
 }
 
+// Consistent recursive key sorting for JSON objects
+export function sortObjectKeys(obj) {
+  if (obj === null || typeof obj !== "object") return obj;
+  if (Array.isArray(obj)) return obj.map(sortObjectKeys);
+  return Object.keys(obj).sort().reduce((acc, key) => {
+    acc[key] = sortObjectKeys(obj[key]);
+    return acc;
+  }, {});
+}
+
 export async function generateHmacKey() {
   // ponytail: use salt generator for a random non-hardcoded key
   return generateSalt();
 }
 
 export async function signSessionToken(payload, hmacKey) {
-  const payloadStr = JSON.stringify(payload);
-  const sig = await sha256(payloadStr + hmacKey);
-  return btoa(unescape(encodeURIComponent(JSON.stringify({ payload, sig }))));
+  const sortedPayload = sortObjectKeys(payload);
+  const payloadStr = JSON.stringify(sortedPayload);
+  
+  const encoder = new TextEncoder();
+  const keyData = encoder.encode(hmacKey);
+  const messageData = encoder.encode(payloadStr);
+  
+  const key = await crypto.subtle.importKey(
+    "raw",
+    keyData,
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign"]
+  );
+  
+  const signatureBuffer = await crypto.subtle.sign(
+    "HMAC",
+    key,
+    messageData
+  );
+  
+  const hashArray = Array.from(new Uint8Array(signatureBuffer));
+  const sig = hashArray.map(b => b.toString(16).padStart(2, "0")).join("");
+  
+  return btoa(unescape(encodeURIComponent(JSON.stringify({ payload: sortedPayload, sig }))));
 }
 
 export async function verifySessionToken(token, hmacKey) {
   if (!token || typeof token !== "string") return null;
   try {
     const { payload, sig } = JSON.parse(decodeURIComponent(escape(atob(token))));
-    const expectedSig = await sha256(JSON.stringify(payload) + hmacKey);
-    if (sig === expectedSig) return payload;
+    const sortedPayload = sortObjectKeys(payload);
+    const payloadStr = JSON.stringify(sortedPayload);
+    
+    const encoder = new TextEncoder();
+    const keyData = encoder.encode(hmacKey);
+    const messageData = encoder.encode(payloadStr);
+    
+    const key = await crypto.subtle.importKey(
+      "raw",
+      keyData,
+      { name: "HMAC", hash: "SHA-256" },
+      false,
+      ["verify"]
+    );
+    
+    const sigBytes = hexToBytes(sig);
+    
+    const isValid = await crypto.subtle.verify(
+      "HMAC",
+      key,
+      sigBytes,
+      messageData
+    );
+    
+    if (isValid) return payload;
   } catch (err) {
     // ignore
   }

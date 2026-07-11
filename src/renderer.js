@@ -72,12 +72,42 @@ export function patchAppDOM(targetEl, htmlValue) {
         if (currentViewContainer) {
           currentViewContainer.className = "view-container animate-fade";
           
-          // Clear current contents to prevent memory leaks from dangling event listeners
+          // Record current active element focus and selection coordinates to prevent layout jumps/resets
+          const activeEl = document.activeElement;
+          let activeInfo = null;
+          if (activeEl && currentViewContainer.contains(activeEl)) {
+            activeInfo = {
+              path: getElementPath(currentViewContainer, activeEl),
+              value: activeEl.value,
+              selectionStart: activeEl.selectionStart,
+              selectionEnd: activeEl.selectionEnd
+            };
+          }
+          
+          // Clear current contents cleanly
           while (currentViewContainer.firstChild) {
             currentViewContainer.removeChild(currentViewContainer.firstChild);
           }
           
           currentViewContainer.innerHTML = newViewContainer.innerHTML;
+          
+          // Restore focus and cursor selection coordinates
+          if (activeInfo) {
+            const newActiveEl = findElementByPath(currentViewContainer, activeInfo.path);
+            if (newActiveEl) {
+              newActiveEl.focus();
+              try {
+                if (activeInfo.value !== undefined) {
+                  newActiveEl.value = activeInfo.value;
+                }
+                if (activeInfo.selectionStart !== null && activeInfo.selectionEnd !== null) {
+                  newActiveEl.setSelectionRange(activeInfo.selectionStart, activeInfo.selectionEnd);
+                }
+              } catch (e) {
+                // Ignore errors for elements that don't support text selections
+              }
+            }
+          }
         }
       }
       
@@ -100,4 +130,27 @@ export function initDOMRenderer() {
       patchAppDOM(el, value);
     }
   };
+}
+
+// Tree path utilities for active element focus preservation
+function getElementPath(root, target) {
+  const path = [];
+  let curr = target;
+  while (curr && curr !== root) {
+    const parent = curr.parentElement;
+    if (!parent) break;
+    const index = Array.from(parent.children).indexOf(curr);
+    path.unshift(index);
+    curr = parent;
+  }
+  return path;
+}
+
+function findElementByPath(root, path) {
+  let curr = root;
+  for (const index of path) {
+    if (!curr || !curr.children[index]) return null;
+    curr = curr.children[index];
+  }
+  return curr;
 }
