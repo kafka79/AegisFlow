@@ -309,11 +309,13 @@ store.addEmployee = async function (emp, password) {
   
   // Register in Mock Backend Server Database first
   const sessionToken = store.state.currentSession ? store.state.currentSession.token : null;
-  const { token } = await MockServer.registerUser(emp, password, sessionToken);
+  const csrfToken = store.state.currentSession ? store.state.currentSession.csrfToken : null;
+  const { token, csrfToken: newCsrfToken } = await MockServer.registerUser(emp, password, sessionToken, csrfToken);
   
   // Keep local session aligned if self
   if (store.state.currentSession && store.state.currentSession.employeeId === emp.id) {
     store.state.currentSession.token = token;
+    store.state.currentSession.csrfToken = newCsrfToken;
   }
   
   this.state.employees.push(emp);
@@ -479,12 +481,13 @@ window.handleLoginSubmit = async function (e) {
 
   try {
     // Authenticate through the private Mock Backend Server closure
-    const { token, employee } = await MockServer.authenticate(loginVal, passVal);
+    const { token, csrfToken, employee } = await MockServer.authenticate(loginVal, passVal);
     
     store.state.currentSession = {
       employeeId: employee.id,
       role: employee.role,
-      token: token
+      token: token,
+      csrfToken: csrfToken
     };
     
     // Populate client local state variables
@@ -555,11 +558,12 @@ window.handleSignupSubmit = async function (e) {
   };
 
   try {
-    const { token, employee } = await MockServer.registerUser(newAdmin, pass);
+    const { token, csrfToken, employee } = await MockServer.registerUser(newAdmin, pass);
     store.state.currentSession = {
       employeeId: employee.id,
       role: "HR",
-      token: token
+      token: token,
+      csrfToken: csrfToken
     };
     
     // Sync state locally
@@ -638,7 +642,7 @@ window.renderSignupView = function () {
         </div>
       </div>
     </div>
-  `;
+  `);
 };
 
 window.handleSignupSubmitOverrides = async function (event) {
@@ -718,11 +722,12 @@ window.handleSignupSubmitOverrides = async function (event) {
   };
 
   try {
-    const { token } = await MockServer.registerUser(employee, pendingSignup.password);
+    const { token, csrfToken } = await MockServer.registerUser(employee, pendingSignup.password);
     store.state.currentSession = {
       employeeId: employee.id,
       role: employee.role,
-      token: token
+      token: token,
+      csrfToken: csrfToken
     };
     
     // Sync cache state
@@ -1016,10 +1021,11 @@ window.handlePasswordUpdate = async function (e, empId) {
     try {
       const state = JSON.parse(stateStr);
       const token = state.currentSession ? state.currentSession.token : null;
+      const csrfToken = state.currentSession ? state.currentSession.csrfToken : null;
       if (token) {
         // Safe backend update
         const employee = store.getEmployee(empId);
-        await MockServer.registerUser(employee, newPass, token);
+        await MockServer.registerUser(employee, newPass, token, csrfToken);
       }
     } catch(err) { console.error(err); }
   }
@@ -1593,6 +1599,7 @@ window.renderPayrollView = function () {
     if (!actionCell || actionCell.querySelector(".payroll-edit-btn")) return;
     actionCell.insertAdjacentHTML("beforeend", `<button class="btn btn-secondary btn-sm payroll-edit-btn" onclick="showPayrollEditModal('${attr(empId)}')">Edit Pay</button>`);
   });
+  window.renderComplianceCenter?.();
 };
 
 window.showPayrollEditModal = function (empId) {
@@ -1726,7 +1733,7 @@ window.handleOnboardSubmit = async function (event) {
     }
     showToast(`Employee onboarded successfully with ID: ${added.id}`, "success");
   } catch (err) {
-    showToast(`Onboarding failed: ${err.message}`, "error");
+    showToast(`Onboarding failed: ${text(err.message)}`, "error");
   } finally {
     if (submitBtn) {
       submitBtn.disabled = false;
@@ -1819,6 +1826,536 @@ window.handleAvatarChange = function (event, empId) {
     showToast("Profile avatar saved.", "success");
     renderProfileView({ id: empId });
   });
+};
+
+// Expose custom routes and sidebar overrides on bootstrap hook
+if (typeof hookRouter !== "undefined") {
+  const originalHookRouter = hookRouter;
+  window.hookRouter = function() {
+    originalHookRouter();
+    if (typeof router !== "undefined") {
+      router.routes.leaveConfig = () => window.renderLeaveConfigView();
+      router.routes.logs = () => window.renderSystemLogsView();
+    }
+  };
+}
+
+if (typeof getSidebarHTML !== "undefined") {
+  const originalGetSidebarHTML = getSidebarHTML;
+  window.getSidebarHTML = function(activeLink) {
+    let html = originalGetSidebarHTML(activeLink);
+    const user = store.getCurrentUser();
+    if (user && user.role === "HR") {
+      const configItem = `
+        <li>
+          <a class="sidebar-link ${activeLink === 'leaveConfig' ? 'active' : ''}" onclick="router.navigate('leaveConfig')">
+            <svg style="width: 18px; height: 18px; margin-right: 12px; vertical-align: middle;" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect>
+              <line x1="16" y1="2" x2="16" y2="6"></line>
+              <line x1="8" y1="2" x2="8" y2="6"></line>
+              <line x1="3" y1="10" x2="21" y2="10"></line>
+            </svg> Leave Config
+          </a>
+        </li>
+      `;
+      const logsItem = `
+        <li>
+          <a class="sidebar-link ${activeLink === 'logs' ? 'active' : ''}" onclick="router.navigate('logs')">
+            <svg style="width: 18px; height: 18px; margin-right: 12px; vertical-align: middle;" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <rect x="2" y="3" width="20" height="14" rx="2" ry="2"></rect>
+              <line x1="2" y1="10" x2="22" y2="10"></line>
+              <line x1="12" y1="21" x2="12" y2="17"></line>
+              <line x1="7" y1="21" x2="17" y2="21"></line>
+            </svg> System Logs
+          </a>
+        </li>
+      `;
+      html = html.replace("</ul>", `${configItem}${logsItem}</ul>`);
+    }
+    return html;
+  };
+}
+
+// Compliance Center downloads and HTML appending
+window.renderComplianceCenter = function() {
+  const container = document.querySelector(".view-container");
+  if (!container || document.getElementById("compliance-center")) return;
+  
+  const complianceHTML = `
+    <div id="compliance-center" class="animate-fade" style="margin-top: 40px;">
+      <h3 style="margin-bottom: 20px; font-weight: 600;">Statutory Compliance Center</h3>
+      <p style="color: var(--text-muted); margin-bottom: 24px; font-size: 0.9rem;">
+        Generate and download regulatory compliance files, tax filings, and statutory reports for the workforce.
+      </p>
+      
+      <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 20px; margin-bottom: 32px;">
+        <div class="glass" style="padding: 24px; border-top: 4px solid var(--accent);">
+          <h4 style="font-weight: 700; margin-bottom: 8px; color: var(--text-main);">Form 16 (TDS Certificate)</h4>
+          <p style="font-size: 0.85rem; color: var(--text-muted); margin-bottom: 20px;">
+            Download a mock Form 16 Certificate of Tax Deducted at Source (TDS) on salary for an employee.
+          </p>
+          <div class="form-group" style="margin-bottom: 16px;">
+            <select class="input-ctrl" id="compliance-form16-emp" style="padding: 8px; font-size: 0.85rem;">
+              ${store.state.employees.map(e => `<option value="${attr(e.id)}">${text(e.name)} (${attr(e.id)})</option>`).join("")}
+            </select>
+          </div>
+          <button class="btn btn-primary btn-sm" onclick="downloadForm16()">Download Form 16</button>
+        </div>
+
+        <div class="glass" style="padding: 24px; border-top: 4px solid var(--accent);">
+          <h4 style="font-weight: 700; margin-bottom: 8px; color: var(--text-main);">Form 24Q (TDS Return)</h4>
+          <p style="font-size: 0.85rem; color: var(--text-muted); margin-bottom: 20px;">
+            Download the quarterly TDS Return file in standard CSV format for the entire workforce.
+          </p>
+          <button class="btn btn-primary btn-sm" onclick="downloadForm24Q()">Download CSV Return</button>
+        </div>
+
+        <div class="glass" style="padding: 24px; border-top: 4px solid var(--accent);">
+          <h4 style="font-weight: 700; margin-bottom: 8px; color: var(--text-main);">PF ECR Text Report</h4>
+          <p style="font-size: 0.85rem; color: var(--text-muted); margin-bottom: 20px;">
+            Download the Electronic Challan-cum-Return (ECR) text format file for PF portal upload.
+          </p>
+          <button class="btn btn-primary btn-sm" onclick="downloadPfEcr()">Download ECR Text</button>
+        </div>
+
+        <div class="glass" style="padding: 24px; border-top: 4px solid var(--accent);">
+          <h4 style="font-weight: 700; margin-bottom: 8px; color: var(--text-main);">ESI Monthly Return</h4>
+          <p style="font-size: 0.85rem; color: var(--text-muted); margin-bottom: 20px;">
+            Download the Employee State Insurance (ESI) monthly return CSV filing for ESI portal.
+          </p>
+          <button class="btn btn-primary btn-sm" onclick="downloadEsiReturn()">Download ESI CSV</button>
+        </div>
+      </div>
+    </div>
+  `;
+  container.insertAdjacentHTML("beforeend", complianceHTML);
+};
+
+window.downloadForm16 = function() {
+  const empId = document.getElementById("compliance-form16-emp").value;
+  const emp = store.getEmployee(empId);
+  if (!emp) {
+    showToast("Selected employee not found.", "error");
+    return;
+  }
+  
+  const calc = calculateMonthlyPayroll(emp);
+  const basic = emp.wage * 0.5;
+  const grossSalary = emp.wage * 12;
+  const standardDeduction = 75000;
+  const pt = calc.breakdown.pt * 12;
+  const pf = calc.breakdown.employeePf * 12;
+  const totalDeductions = standardDeduction + pt + pf;
+  const taxableIncome = Math.max(0, grossSalary - totalDeductions);
+  
+  const content = `========================================================================
+FORM NO. 16
+[See rule 31(1)(a)]
+Certificate under section 203 of the Income-tax Act, 1961 for tax 
+deducted at source from income chargeable under the head "Salaries"
+========================================================================
+Assessment Year: 2026-27 | Financial Year: 2025-26
+------------------------------------------------------------------------
+EMPLOYER DETAILS:
+Name: WorkForces Ltd
+Address: Headquarters, Mumbai, India
+PAN: MOCKW1234F | TAN: MOCKW12345T
+
+EMPLOYEE DETAILS:
+Name: ${emp.name}
+PAN: ${emp.pan || "PAN_REQUIRED"}
+UAN: ${emp.uan || "UAN_REQUIRED"}
+ESIC: ${emp.esic || "ESIC_REQUIRED"}
+Designation: ${emp.role}
+Department: ${emp.department}
+Location: ${emp.location}
+------------------------------------------------------------------------
+PART A: SUMMARY OF TAX DEDUCTED AND DEPOSITED
+Gross Salary (Annual): Rs. ${grossSalary.toFixed(2)}
+Standard Deduction: Rs. ${standardDeduction.toFixed(2)}
+Professional Tax: Rs. ${pt.toFixed(2)}
+Provident Fund: Rs. ${pf.toFixed(2)}
+Total Deductions under Section 16/VIA: Rs. ${totalDeductions.toFixed(2)}
+Taxable Income: Rs. ${taxableIncome.toFixed(2)}
+Tax Deducted at Source (Annual): Rs. 0.00
+------------------------------------------------------------------------
+Verification:
+I, HR Admin, hereby certify that a sum of Rs. 0.00 has been deducted 
+at source and paid to the credit of the Central Government.
+
+Date: ${new Date().toLocaleDateString()}
+Place: Mumbai
+Signature: [HR ADMIN COMPUTER GENERATED SIGNATURE]
+========================================================================`;
+
+  const blob = new Blob([content], { type: "text/plain;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = `Form16_${emp.id}.txt`;
+  link.click();
+  URL.revokeObjectURL(url);
+  showToast(`Form 16 downloaded for ${emp.name}`, "success");
+};
+
+window.downloadForm24Q = function() {
+  const header = "Employee ID,Name,PAN,Gross Salary,Standard Deduction,PT Deducted,PF Deducted,TDS Deducted\n";
+  const rows = store.state.employees.map(emp => {
+    const calc = calculateMonthlyPayroll(emp);
+    const gross = emp.wage * 12;
+    const pt = calc.breakdown.pt * 12;
+    const pf = calc.breakdown.employeePf * 12;
+    return `"${emp.id}","${emp.name}","${emp.pan || ''}",${gross},75000,${pt},${pf},0`;
+  }).join("\n");
+  
+  const blob = new Blob([header + rows], { type: "text/csv;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = "Form24Q_TDS_Return.csv";
+  link.click();
+  URL.revokeObjectURL(url);
+  showToast("Form 24Q quarterly return CSV downloaded.", "success");
+};
+
+window.downloadPfEcr = function() {
+  const rows = store.state.employees.map(emp => {
+    const calc = calculateMonthlyPayroll(emp);
+    const gross = emp.wage;
+    const basic = gross * 0.5;
+    const pfCeiling = 15000;
+    const epfWages = Math.min(basic, pfCeiling);
+    const epfContribution = Math.round(epfWages * 0.12);
+    const epsContribution = Math.round(epfWages * 0.0833);
+    const difference = epfContribution - epsContribution;
+    
+    return `${emp.uan || "UAN_MISSING"}#~#${emp.name}#~#${Math.round(gross)}#~#${Math.round(epfWages)}#~#${Math.round(epfWages)}#~#${epfContribution}#~#${epsContribution}#~#${difference}`;
+  }).join("\n");
+  
+  const blob = new Blob([rows], { type: "text/plain;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = "PF_ECR_Filing.txt";
+  link.click();
+  URL.revokeObjectURL(url);
+  showToast("PF ECR text file downloaded.", "success");
+};
+
+window.downloadEsiReturn = function() {
+  const header = "IP Number,IP Name,No of Days,Gross Wages,Employee Contribution\n";
+  const rows = store.state.employees.map(emp => {
+    const calc = calculateMonthlyPayroll(emp);
+    const gross = emp.wage;
+    const esiContribution = calc.breakdown.employeeEsi || 0;
+    const daysWorked = calc.payableDays;
+    
+    return `"${emp.esic || "ESIC_MISSING"}","${emp.name}",${daysWorked},${Math.round(gross)},${Math.round(esiContribution)}`;
+  }).join("\n");
+  
+  const blob = new Blob([header + rows], { type: "text/csv;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = "ESI_Monthly_Return.csv";
+  link.click();
+  URL.revokeObjectURL(url);
+  showToast("ESI monthly return CSV downloaded.", "success");
+};
+
+// Leave Configurations Settings View
+window.renderLeaveConfigView = function() {
+  const user = store.getCurrentUser();
+  if (!user || user.role !== "HR") {
+    router.navigate("dashboard");
+    return;
+  }
+  
+  const sidebarHTML = getSidebarHTML("leaveConfig");
+  const headerHTML = getHeaderHTML("Leave Configurations");
+  
+  if (!store.state.leaveConfig) {
+    store.state.leaveConfig = {
+      annualPtoAllotment: 30,
+      annualSickAllotment: 15,
+      accrualSchedule: "Annual",
+      maxCarryForward: 10
+    };
+    store.saveState();
+  }
+  
+  const config = store.state.leaveConfig;
+  
+  const content = `
+    <div class="animate-fade" style="max-width: 600px; margin: 0 auto;">
+      <div class="glass" style="padding: 40px; border-top: 6px solid var(--accent);">
+        <h3 style="margin-bottom: 8px; font-weight: 700; color: var(--accent);">Leave Allotment & Accrual Config</h3>
+        <p style="color: var(--text-muted); margin-bottom: 32px; font-size: 0.9rem;">
+          Configure allotments, accrual modes, and carry-forward rules for employee leaves.
+        </p>
+        
+        <form id="leave-config-form" onsubmit="saveLeaveConfig(event)">
+          <div class="form-group" style="margin-bottom: 20px;">
+            <label for="config-pto">Annual Paid Time Off (PTO) Allotment</label>
+            <input class="input-ctrl" type="number" id="config-pto" min="0" required value="${config.annualPtoAllotment}">
+          </div>
+          
+          <div class="form-group" style="margin-bottom: 20px;">
+            <label for="config-sick">Annual Sick Leave Allotment</label>
+            <input class="input-ctrl" type="number" id="config-sick" min="0" required value="${config.annualSickAllotment}">
+          </div>
+          
+          <div class="form-group" style="margin-bottom: 20px;">
+            <label for="config-accrual">Accrual Schedule</label>
+            <select class="input-ctrl" id="config-accrual" required>
+              <option value="Annual" ${config.accrualSchedule === 'Annual' ? 'selected' : ''}>Annual (Lump sum at start of year)</option>
+              <option value="Monthly" ${config.accrualSchedule === 'Monthly' ? 'selected' : ''}>Monthly (Pro-rated accrual monthly)</option>
+            </select>
+          </div>
+          
+          <div class="form-group" style="margin-bottom: 20px;">
+            <label for="config-carry">Maximum PTO Carry-Forward Days</label>
+            <input class="input-ctrl" type="number" id="config-carry" min="0" required value="${config.maxCarryForward}">
+          </div>
+          
+          <div class="form-group" style="margin-bottom: 32px;">
+            <label for="config-id-format">Employee ID Format Template</label>
+            <input class="input-ctrl" type="text" id="config-id-format" required value="${localStorage.getItem("employee_id_format") || 'ODI{initials}{year}{serial}'}">
+            <span style="font-size: 0.75rem; color: var(--text-muted); display: block; margin-top: 4px;">
+              Placeholders: {initials}, {year}, {serial}, {uuid}. Must contain {serial} or {uuid}.
+            </span>
+          </div>
+          
+          <div style="display: flex; justify-content: flex-end; gap: 12px;">
+            <button class="btn btn-primary" type="submit">Save Configurations</button>
+          </div>
+        </form>
+      </div>
+    </div>
+  `;
+  
+  window.renderApp(`
+    ${sidebarHTML}
+    <div class="main-wrapper" data-layout="main">
+      ${headerHTML}
+      <div class="view-container">
+        ${content}
+      </div>
+    </div>
+  `);
+};
+
+window.saveLeaveConfig = function(e) {
+  e.preventDefault();
+  const idFormat = document.getElementById("config-id-format").value.trim();
+  if (!window.validateIdFormat?.(idFormat)) {
+    alert("Invalid Employee ID Format template! Must contain {serial} or {uuid} and have matching braces.");
+    return;
+  }
+  localStorage.setItem("employee_id_format", idFormat);
+  store.state.leaveConfig = {
+    annualPtoAllotment: parseInt(document.getElementById("config-pto").value, 10),
+    annualSickAllotment: parseInt(document.getElementById("config-sick").value, 10),
+    accrualSchedule: document.getElementById("config-accrual").value,
+    maxCarryForward: parseInt(document.getElementById("config-carry").value, 10)
+  };
+  store.saveState();
+  showToast("Leave configurations saved.", "success");
+};
+
+// System Audit Logs View
+let currentLogsPage = 1;
+const logsPerPage = 15;
+
+window.renderSystemLogsView = function() {
+  const user = store.getCurrentUser();
+  if (!user || user.role !== "HR") {
+    router.navigate("dashboard");
+    return;
+  }
+  
+  const sidebarHTML = getSidebarHTML("logs");
+  const headerHTML = getHeaderHTML("System Audit Logs");
+  
+  const actorFilter = document.getElementById("log-filter-actor")?.value || "";
+  const startFilter = document.getElementById("log-filter-start")?.value || "";
+  const endFilter = document.getElementById("log-filter-end")?.value || "";
+  const retentionPolicy = localStorage.getItem("log_retention_days") || "90";
+  
+  let logs = getAuditLog();
+  
+  const retentionMs = parseInt(retentionPolicy, 10) * 24 * 60 * 60 * 1000;
+  const cutoffTime = Date.now() - retentionMs;
+  const allLogs = JSON.parse(localStorage.getItem("workforces_audit_log") || "[]");
+  const filteredLogs = allLogs.filter(entry => entry.timestamp >= cutoffTime);
+  if (filteredLogs.length !== allLogs.length) {
+    localStorage.setItem("workforces_audit_log", JSON.stringify(filteredLogs));
+    logs = getAuditLog();
+  }
+  
+  if (actorFilter) {
+    logs = logs.filter(l => String(l.actor.id).toLowerCase().includes(actorFilter.toLowerCase()));
+  }
+  if (startFilter) {
+    logs = logs.filter(l => l.timestamp >= new Date(startFilter).getTime());
+  }
+  if (endFilter) {
+    logs = logs.filter(l => l.timestamp <= new Date(endFilter).getTime() + 86400000);
+  }
+  
+  const totalLogs = logs.length;
+  const totalPages = Math.ceil(totalLogs / logsPerPage) || 1;
+  if (currentLogsPage > totalPages) currentLogsPage = totalPages;
+  if (currentLogsPage < 1) currentLogsPage = 1;
+  
+  const startIndex = (currentLogsPage - 1) * logsPerPage;
+  const paginatedLogs = logs.slice(startIndex, startIndex + logsPerPage);
+  
+  const content = `
+    <div class="animate-fade">
+      <div class="glass" style="padding: 24px; margin-bottom: 24px; display: flex; flex-wrap: wrap; gap: 16px; align-items: center; justify-content: space-between;">
+        <div style="display: flex; gap: 12px; flex-wrap: wrap; align-items: center;">
+          <div class="form-group" style="margin-bottom: 0;">
+            <label style="font-size: 0.75rem;">Actor ID</label>
+            <input class="input-ctrl" type="text" id="log-filter-actor" placeholder="Filter by Actor..." value="${attr(actorFilter)}" style="padding: 6px; font-size: 0.85rem;" oninput="filterLogs()">
+          </div>
+          <div class="form-group" style="margin-bottom: 0;">
+            <label style="font-size: 0.75rem;">Start Date</label>
+            <input class="input-ctrl" type="date" id="log-filter-start" value="${attr(startFilter)}" style="padding: 6px; font-size: 0.85rem;" onchange="filterLogs()">
+          </div>
+          <div class="form-group" style="margin-bottom: 0;">
+            <label style="font-size: 0.75rem;">End Date</label>
+            <input class="input-ctrl" type="date" id="log-filter-end" value="${attr(endFilter)}" style="padding: 6px; font-size: 0.85rem;" onchange="filterLogs()">
+          </div>
+        </div>
+        
+        <div style="display: flex; gap: 12px; align-items: center;">
+          <div class="form-group" style="margin-bottom: 0;">
+            <label style="font-size: 0.75rem;">Retention Policy</label>
+            <select class="input-ctrl" id="log-retention-select" style="padding: 6px; font-size: 0.85rem;" onchange="saveLogRetentionPolicy()">
+              <option value="30" ${retentionPolicy === '30' ? 'selected' : ''}>Keep 30 Days</option>
+              <option value="90" ${retentionPolicy === '90' ? 'selected' : ''}>Keep 90 Days</option>
+              <option value="365" ${retentionPolicy === '365' ? 'selected' : ''}>Keep 365 Days</option>
+              <option value="9999" ${retentionPolicy === '9999' ? 'selected' : ''}>Keep Indefinitely</option>
+            </select>
+          </div>
+          <button class="btn btn-secondary btn-sm" onclick="exportLogs('json')" style="margin-top: 16px;">Export JSON</button>
+          <button class="btn btn-secondary btn-sm" onclick="exportLogs('csv')" style="margin-top: 16px;">Export CSV</button>
+        </div>
+      </div>
+      
+      <div class="data-table-container glass" style="margin-bottom: 20px;">
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th>Timestamp</th>
+              <th>Action</th>
+              <th>Entity</th>
+              <th>Actor</th>
+              <th>Details / Changes</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${paginatedLogs.map(l => `
+              <tr>
+                <td style="font-family: var(--font-mono); font-size: 0.8rem; white-space: nowrap;">
+                  ${new Date(l.timestamp).toLocaleString()}
+                </td>
+                <td>
+                  <span class="status-badge ${l.action === 'CREATE' ? 'approved' : l.action === 'UPDATE' ? 'pending' : 'rejected'}">
+                    ${l.action}
+                  </span>
+                </td>
+                <td style="font-size: 0.85rem;">
+                  <strong>${l.entityType}</strong> (${l.entityId})
+                </td>
+                <td style="font-size: 0.85rem;">
+                  ${l.actor.id} (${l.actor.role})
+                </td>
+                <td style="font-size: 0.8rem; font-family: var(--font-mono); max-width: 400px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" title="${attr(JSON.stringify(l.changes))}">
+                  ${text(JSON.stringify(l.changes))}
+                </td>
+              </tr>
+            `).join("") || `
+              <tr>
+                <td colspan="5" style="text-align: center; color: var(--text-muted); padding: 32px;">
+                  No system logs found matching the filters.
+                </td>
+              </tr>
+            `}
+          </tbody>
+        </table>
+      </div>
+      
+      <div style="display: flex; justify-content: space-between; align-items: center; padding: 12px 24px;" class="glass">
+        <span style="font-size: 0.85rem; color: var(--text-muted);">
+          Showing ${startIndex + 1} - ${Math.min(startIndex + logsPerPage, totalLogs)} of ${totalLogs} logs
+        </span>
+        <div style="display: flex; gap: 8px;">
+          <button class="calendar-nav-btn" onclick="changeLogsPage(-1)" ${currentLogsPage === 1 ? 'disabled' : ''}>&lt;</button>
+          <span style="padding: 6px 12px; font-size: 0.85rem;">Page ${currentLogsPage} of ${totalPages}</span>
+          <button class="calendar-nav-btn" onclick="changeLogsPage(1)" ${currentLogsPage === totalPages ? 'disabled' : ''}>&gt;</button>
+        </div>
+      </div>
+    </div>
+  `;
+  
+  window.renderApp(`
+    ${sidebarHTML}
+    <div class="main-wrapper" data-layout="main">
+      ${headerHTML}
+      <div class="view-container">
+        ${content}
+      </div>
+    </div>
+  `);
+};
+
+window.filterLogs = function() {
+  currentLogsPage = 1;
+  renderSystemLogsView();
+};
+
+window.changeLogsPage = function(offset) {
+  currentLogsPage += offset;
+  renderSystemLogsView();
+};
+
+window.saveLogRetentionPolicy = function() {
+  const policy = document.getElementById("log-retention-select").value;
+  localStorage.setItem("log_retention_days", policy);
+  showToast("Log retention policy updated.", "success");
+  renderSystemLogsView();
+};
+
+window.exportLogs = function(format) {
+  const logs = getAuditLog();
+  let content = "";
+  let filename = "";
+  
+  if (format === "json") {
+    content = JSON.stringify(logs, null, 2);
+    filename = "system_audit_logs.json";
+  } else {
+    const headers = "ID,Timestamp,Action,EntityType,EntityID,ActorID,ActorRole,Changes\n";
+    const rows = logs.map(l => {
+      const time = new Date(l.timestamp).toISOString();
+      const changes = JSON.stringify(l.changes).replace(/"/g, '""');
+      return `"${l.id}","${time}","${l.action}","${l.entityType}","${l.entityId}","${l.actor.id}","${l.actor.role}","${changes}"`;
+    }).join("\n");
+    content = headers + rows;
+    filename = "system_audit_logs.csv";
+  }
+  
+  const mime = format === "json" ? "application/json" : "text/csv";
+  const blob = new Blob([content], { type: `${mime};charset=utf-8` });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  link.click();
+  URL.revokeObjectURL(url);
+  showToast(`Logs exported to ${format.toUpperCase()}`, "success");
 };
 
 // ==========================================

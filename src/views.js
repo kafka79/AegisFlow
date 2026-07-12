@@ -1,0 +1,2118 @@
+import { 
+  getTodayString, getNowTimeString, parseTimeToMs, calculateDaysBetween, 
+  validateIdFormat, generateEmployeeId, logAudit, getAuditLog, 
+  calculateProfessionalTax, calculateTDS, getSalaryBreakdown, isHoliday, NATIONAL_HOLIDAYS 
+} from "./helpers.js";
+import { escapeHtml } from "./renderer.js";
+
+function showInlineAlert(container, message, type = "error") {
+  if (!container) return;
+  container.innerHTML = "";
+  const alert = document.createElement("div");
+  alert.className = `alert-banner alert-${type}`;
+  const span = document.createElement("span");
+  span.textContent = message;
+  alert.appendChild(span);
+  container.appendChild(alert);
+}
+
+// SVG Icons
+export const ICONS = {
+  dashboard: `<svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M4 6a2 2 0 012-2h2a2 2 0 012 2v4a2 2 0 01-2 2H6a2 2 0 01-2-2V6zM14 6a2 2 0 012-2h2a2 2 0 012 2v4a2 2 0 01-2 2h-2a2 2 0 01-2-2V6zM4 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2v-2zM14 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2v-2z"/></svg>`,
+  employees: `<svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z"/></svg>`,
+  attendance: `<svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>`,
+  timeoff: `<svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg>`,
+  logout: `<svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1"/></svg>`,
+  plus: `<svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M12 4v16m8-8H4"/></svg>`,
+  search: `<svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/></svg>`,
+  user: `<svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z"/></svg>`,
+  settings: `<svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/><path d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/></svg>`,
+  payroll: `<svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M9 8h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V15a2 2 0 01-2 2z"/></svg>`
+};
+window.ICONS = ICONS;
+
+export let selectedCalendarDate = new Date();
+window.selectedCalendarDate = selectedCalendarDate;
+
+export function getSidebarHTML(activeLink) {
+  const user = window.store?.getCurrentUser();
+  if (!user) return "";
+
+  const isAdmin = user.role === "HR";
+  
+  return `
+    <div class="sidebar">
+      <div class="sidebar-brand">
+        <svg class="sidebar-logo" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/>
+        </svg>
+        <span class="sidebar-brand-name">WorkForces</span>
+      </div>
+      <ul class="sidebar-menu">
+        <li>
+          <a class="sidebar-link ${activeLink === 'dashboard' ? 'active' : ''}" onclick="router.navigate('dashboard')">
+            ${ICONS.dashboard} Dashboard
+          </a>
+        </li>
+        <li>
+          <a class="sidebar-link ${activeLink === 'employees' ? 'active' : ''}" onclick="router.navigate('employees')">
+            ${ICONS.employees} Employees
+          </a>
+        </li>
+        <li>
+          <a class="sidebar-link ${activeLink === 'attendance' ? 'active' : ''}" onclick="router.navigate('attendance')">
+            ${ICONS.attendance} Attendance
+          </a>
+        </li>
+        <li>
+          <a class="sidebar-link ${activeLink === 'timeoff' ? 'active' : ''}" onclick="router.navigate('timeoff')">
+            ${ICONS.timeoff} Time Off
+          </a>
+        </li>
+        <li>
+          <a class="sidebar-link ${activeLink === 'payroll' ? 'active' : ''}" onclick="router.navigate('payroll')">
+            ${ICONS.payroll} Payroll
+          </a>
+        </li>
+      </ul>
+    </div>
+  `;
+}
+window.getSidebarHTML = getSidebarHTML;
+
+export function getHeaderHTML(title) {
+  const user = window.store?.getCurrentUser();
+  if (!user) return "";
+
+  const initials = user.name.split(" ").map(n => n[0]).join("").substring(0, 2).toUpperCase();
+  const avatarSrc = user.avatar || window.getCachedAvatar?.(user.id, initials) || `data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100"><circle cx="50" cy="50" r="50" fill="%236366f1"/><text x="50" y="55" font-family="'Outfit', sans-serif" font-size="32" font-weight="700" fill="white" text-anchor="middle" dominant-baseline="middle">${initials}</text></svg>`;
+  const safeTitle = escapeHtml(title);
+  const safeUserName = escapeHtml(user.name);
+  const safeUserRole = user.role === "HR" ? "Admin / HR" : "Employee";
+  const safeUserId = escapeHtml(user.id);
+
+  return `
+    <header class="top-header">
+      <h1 class="view-title">${safeTitle}</h1>
+      <div class="header-actions">
+        <div class="profile-dropdown-container">
+          <div class="user-profile-trigger" onclick="toggleProfileDropdown(event)">
+            <img class="user-avatar" src="${avatarSrc}" alt="Avatar">
+            <div class="user-details">
+              <span class="user-name">${safeUserName}</span>
+              <span class="user-role">${safeUserRole}</span>
+            </div>
+          </div>
+          <div id="dropdown-menu" class="profile-dropdown">
+            <button class="dropdown-item" onclick="router.navigate('profile', { id: '${safeUserId}' })">
+              ${ICONS.user} My Profile
+            </button>
+            <div class="dropdown-divider"></div>
+            <button class="dropdown-item danger" onclick="handleLogout()">
+              ${ICONS.logout} Log Out
+            </button>
+          </div>
+        </div>
+      </div>
+    </header>
+  `;
+}
+window.getHeaderHTML = getHeaderHTML;
+
+export function toggleProfileDropdown(event) {
+  event.stopPropagation();
+  const menu = document.getElementById("dropdown-menu");
+  if (menu) menu.classList.toggle("show");
+}
+window.toggleProfileDropdown = toggleProfileDropdown;
+
+document.addEventListener("click", () => {
+  const menu = document.getElementById("dropdown-menu");
+  if (menu) menu.classList.remove("show");
+});
+
+export function handleLogout() {
+  window.store.state.currentSession = null;
+  window.store.saveState();
+  window.router.navigate("login");
+}
+window.handleLogout = handleLogout;
+
+export function getModalHTML(title, bodyHTML) {
+  return `
+    <div class="modal-content glass glow-accent">
+      <div class="modal-header">
+        <h3 class="modal-title">${escapeHtml(title)}</h3>
+        <button class="modal-close" onclick="closeModal()">&times;</button>
+      </div>
+      <div class="modal-body">
+        ${bodyHTML}
+      </div>
+    </div>
+  `;
+}
+window.getModalHTML = getModalHTML;
+
+export function showModal(title, bodyHTML) {
+  const container = document.getElementById("modal-container");
+  if (container) {
+    container.innerHTML = getModalHTML(title, bodyHTML);
+    container.classList.add("show");
+  }
+}
+window.showModal = showModal;
+
+export function closeModal() {
+  const container = document.getElementById("modal-container");
+  if (container) {
+    container.classList.remove("show");
+    container.innerHTML = "";
+  }
+}
+window.closeModal = closeModal;
+
+export function renderLoginView() {
+  window.renderApp(`
+    <div class="auth-wrapper">
+      <div class="auth-card glass glow-accent animate-fade">
+        <div class="auth-header">
+          <svg class="auth-logo" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/>
+          </svg>
+          <h2 class="auth-title">WorkForces</h2>
+          <p class="auth-subtitle">Login to your HRMS portal</p>
+        </div>
+        
+        <div id="login-alert"></div>
+
+        <form id="login-form" onsubmit="handleLoginSubmit(event)">
+          <div class="form-group">
+            <label for="login-email">Email or Login ID</label>
+            <input class="input-ctrl" type="text" id="login-email" required placeholder="admin@odoo.com or ODIAD20260001">
+          </div>
+          
+          <div class="form-group">
+            <label for="login-password">Password</label>
+            <input class="input-ctrl" type="password" id="login-password" required placeholder="••••••••">
+          </div>
+
+          <button class="btn btn-primary" type="submit" style="width: 100%; margin-top: 12px;">Sign In</button>
+        </form>
+
+        <div class="auth-footer">
+          Don't have a corporate workspace? <a href="#signup" class="auth-link">Register Company</a>
+        </div>
+      </div>
+    </div>
+  `);
+}
+window.renderLoginView = renderLoginView;
+
+export async function handleLoginSubmit(e) {
+  e.preventDefault();
+  const loginVal = document.getElementById("login-email").value.trim();
+  const passVal = document.getElementById("login-password").value;
+  const alertDiv = document.getElementById("login-alert");
+
+  try {
+    const { MockServer } = await import("./server.js");
+    const result = await MockServer.authenticate(loginVal, passVal);
+    
+    window.store.state.currentSession = {
+      employeeId: result.employee.id,
+      role: result.employee.role,
+      token: result.token,
+      csrfToken: result.csrfToken
+    };
+    window.store.saveState();
+    window.router.navigate("dashboard");
+  } catch (err) {
+    showInlineAlert(alertDiv, err.message || "Login failed.");
+  }
+}
+window.handleLoginSubmit = handleLoginSubmit;
+
+export function renderSignupView() {
+  window.renderApp(`
+    <div class="auth-wrapper">
+      <div class="auth-card glass glow-accent animate-fade">
+        <div class="auth-header">
+          <svg class="auth-logo" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/>
+          </svg>
+          <h2 class="auth-title">Register Workspace</h2>
+          <p class="auth-subtitle">Initialize your company's HRMS server</p>
+        </div>
+        
+        <div id="signup-alert"></div>
+
+        <form id="signup-form" onsubmit="handleSignupSubmit(event)">
+          <div class="form-group">
+            <label for="company-name">Company Name</label>
+            <input class="input-ctrl" type="text" id="company-name" required placeholder="Odoo India Ltd.">
+          </div>
+
+          <div class="form-group">
+            <label for="admin-name">Admin Officer Name</label>
+            <input class="input-ctrl" type="text" id="admin-name" required placeholder="John Doe">
+          </div>
+
+          <div class="form-group">
+            <label for="admin-email">Corporate Email Address</label>
+            <input class="input-ctrl" type="email" id="admin-email" required placeholder="admin@odoo.com">
+          </div>
+
+          <div class="form-group">
+            <label for="admin-password">Password</label>
+            <input class="input-ctrl" type="password" id="admin-password" required placeholder="••••••••">
+          </div>
+
+          <div class="form-group">
+            <label for="admin-confirm-password">Confirm Password</label>
+            <input class="input-ctrl" type="password" id="admin-confirm-password" required placeholder="Re-enter password">
+          </div>
+
+          <button class="btn btn-primary" type="submit" style="width: 100%; margin-top: 12px;">Initialize Space</button>
+        </form>
+
+        <div class="auth-footer">
+          Already have an active account? <a href="#login" class="auth-link">Log In</a>
+        </div>
+      </div>
+    </div>
+  `);
+}
+window.renderSignupView = renderSignupView;
+
+export async function handleSignupSubmit(e) {
+  e.preventDefault();
+  const compName = document.getElementById("company-name").value.trim();
+  const adminName = document.getElementById("admin-name").value.trim();
+  const email = document.getElementById("admin-email").value.trim();
+  const pass = document.getElementById("admin-password").value;
+  const confirmPass = document.getElementById("admin-confirm-password").value;
+  const alertDiv = document.getElementById("signup-alert");
+
+  if (pass.length < 8) {
+    if (alertDiv) alertDiv.innerHTML = `<div class="alert-banner alert-error">Password must be at least 8 characters long.</div>`;
+    return;
+  }
+
+  if (pass !== confirmPass) {
+    if (alertDiv) alertDiv.innerHTML = `<div class="alert-banner alert-error">Passwords do not match.</div>`;
+    return;
+  }
+
+  const newAdmin = {
+    id: "",
+    name: adminName,
+    email: email,
+    phone: "+91 99999 99999",
+    role: "HR",
+    department: "Human Resources",
+    manager: "N/A",
+    location: "Headquarters",
+    dateOfJoining: getTodayString(),
+    dob: "1990-01-01",
+    address: "HQ Campus, Tech Hub",
+    nationality: "Indian",
+    gender: "Other",
+    maritalStatus: "Single",
+    status: "Present",
+    wage: 150000,
+    bankName: "SBI",
+    accountNo: "000000000000",
+    ifsc: "SBIN0000000",
+    pan: "ABCDE1234F",
+    ptoDays: 30,
+    sickDays: 15,
+    avatar: ""
+  };
+
+  try {
+    const { MockServer } = await import("./server.js");
+    const result = await MockServer.registerUser(newAdmin, pass);
+    
+    window.store.state.currentSession = {
+      employeeId: result.employee.id,
+      role: "HR",
+      token: result.token,
+      csrfToken: result.csrfToken
+    };
+    window.store.saveState();
+    window.router.navigate("dashboard");
+  } catch (err) {
+    showInlineAlert(alertDiv, `Registration failed: ${err.message || "Unknown error"}`);
+  }
+}
+window.handleSignupSubmit = handleSignupSubmit;
+
+export function renderDashboardView() {
+  const user = window.store.getCurrentUser();
+  const sidebarHTML = getSidebarHTML("dashboard");
+  const headerHTML = getHeaderHTML("Dashboard");
+  
+  let dashboardContent = "";
+
+  if (user.role === "HR") {
+    const totalEmployees = window.store.state.employees.length;
+    let presentCount = 0;
+    let leaveCount = 0;
+    let absentCount = 0;
+    
+    const todayStr = getTodayString();
+    window.store.state.employees.forEach(emp => {
+      const onLeave = window.store.state.timeOff.some(l => 
+        l.employeeId === emp.id && 
+        l.status === "Approved" && 
+        todayStr >= l.startDate && 
+        todayStr <= l.endDate
+      );
+      
+      if (onLeave) {
+        leaveCount++;
+      } else {
+        const hasCheckedIn = window.store.state.attendance.some(a => a.employeeId === emp.id && a.date === todayStr);
+        if (hasCheckedIn) {
+          presentCount++;
+        } else {
+          absentCount++;
+        }
+      }
+    });
+
+    const pendingLeaves = window.store.state.timeOff.filter(l => l.status === "Pending").length;
+
+    dashboardContent = `
+      <div class="dashboard-grid animate-fade">
+        <div class="quick-info-panel" style="grid-column: span 12; grid-template-columns: repeat(4, 1fr);">
+          <div class="info-card glass glow-accent">
+            <div class="info-card-header">
+              <span>Total Force</span>
+              ${ICONS.employees}
+            </div>
+            <div class="info-card-val">${totalEmployees}</div>
+            <div class="info-card-footer">Registered workforce accounts</div>
+          </div>
+          <div class="info-card glass" style="border-left: 4px solid var(--status-present);">
+            <div class="info-card-header">
+              <span>Present Today</span>
+              <span class="card-status-dot present" style="position: static;"></span>
+            </div>
+            <div class="info-card-val" style="color: var(--status-present);">${presentCount}</div>
+            <div class="info-card-footer">Staff checked-in today</div>
+          </div>
+          <div class="info-card glass" style="border-left: 4px solid var(--status-leave);">
+            <div class="info-card-header">
+              <span>On Leave</span>
+              <span class="card-status-dot leave" style="position: static;"></span>
+            </div>
+            <div class="info-card-val" style="color: var(--status-leave);">${leaveCount}</div>
+            <div class="info-card-footer">Staff with approved time-off</div>
+          </div>
+          <div class="info-card glass" style="border-left: 4px solid var(--status-absent);">
+            <div class="info-card-header">
+              <span>Absent</span>
+              <span class="card-status-dot absent" style="position: static;"></span>
+            </div>
+            <div class="info-card-val" style="color: var(--status-absent);">${absentCount}</div>
+            <div class="info-card-footer">Unmarked/missing check-ins</div>
+          </div>
+        </div>
+
+        <div class="glass" style="grid-column: span 8; padding: 28px;">
+          <h3 style="margin-bottom: 20px; font-weight: 600;">Time Off Pending Approvals</h3>
+          ${pendingLeaves > 0 ? `
+            <div class="alert-banner alert-error" style="margin-bottom: 20px;">
+              <span>You have ${pendingLeaves} pending leave requests requiring attention!</span>
+            </div>
+          ` : ""}
+          <div class="data-table-container">
+            <table class="data-table">
+              <thead>
+                <tr>
+                  <th>Employee</th>
+                  <th>Type</th>
+                  <th>Dates</th>
+                  <th>Status</th>
+                  <th>Action</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${window.store.state.timeOff.filter(l => l.status === "Pending").slice(0, 5).map(l => `
+                  <tr>
+                    <td><strong>${l.employeeName}</strong></td>
+                    <td>${l.leaveType}</td>
+                    <td>${l.startDate} to ${l.endDate}</td>
+                    <td><span class="status-badge pending">Pending</span></td>
+                    <td>
+                      <button class="btn btn-secondary btn-sm" onclick="router.navigate('timeoff')">Review</button>
+                    </td>
+                  </tr>
+                `).join("") || `
+                  <tr>
+                    <td colspan="5" style="text-align: center; color: var(--text-muted); padding: 32px;">
+                      All leave requests have been processed. Clean desk!
+                    </td>
+                  </tr>
+                `}
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <div class="glass" style="grid-column: span 4; padding: 28px; display: flex; flex-direction: column; gap: 16px;">
+          <h3 style="font-weight: 600; margin-bottom: 8px;">HR Admin Actions</h3>
+          <button class="btn btn-primary" onclick="showOnboardModal()">Onboard New Employee</button>
+          <button class="btn btn-secondary" onclick="router.navigate('payroll')">Run Payroll Module</button>
+          <button class="btn btn-secondary" onclick="router.navigate('attendance')">Export Daily Attendance</button>
+        </div>
+      </div>
+    `;
+  } else {
+    const attendanceRecord = window.store.getAttendanceToday(user.id);
+    const isCheckedIn = attendanceRecord && !attendanceRecord.checkOut;
+    const checkInTime = attendanceRecord ? attendanceRecord.checkIn : "--:--";
+    const totalWorked = attendanceRecord && attendanceRecord.workHours ? `${attendanceRecord.workHours} hrs` : "0.00 hrs";
+    const leaveDays = user.ptoDays;
+    const sickDays = user.sickDays;
+
+    dashboardContent = `
+      <div class="dashboard-grid animate-fade">
+        <div class="checkin-widget glass glow-accent">
+          <h3 style="font-weight: 600;">Work Session Clock</h3>
+          <div class="checkin-time" id="clock-display">00:00:00</div>
+          <div class="checkin-date">${new Date().toLocaleDateString(undefined, { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}</div>
+          
+          <button id="clock-btn" class="checkin-btn ${isCheckedIn ? 'checked-in' : 'checked-out'}" onclick="handleClockTrigger()">
+            ${isCheckedIn ? 'Check Out' : 'Check In'}
+          </button>
+
+          <div class="checkin-stats">
+            <div class="stat-item">
+              <span class="stat-val" style="color: var(--status-present);">${checkInTime}</span>
+              <span class="stat-label">Checked In</span>
+            </div>
+            <div class="stat-item">
+              <span class="stat-val" style="color: var(--accent);">${totalWorked}</span>
+              <span class="stat-label">Logged Hours</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="quick-info-panel">
+          <div class="info-card glass">
+            <div class="info-card-header">
+              <span>Paid Time Off</span>
+              ${ICONS.timeoff}
+            </div>
+            <div class="info-card-val">${leaveDays}</div>
+            <div class="info-card-footer">Days remaining available</div>
+          </div>
+
+          <div class="info-card glass">
+            <div class="info-card-header">
+              <span>Sick Leaves</span>
+              ${ICONS.timeoff}
+            </div>
+            <div class="info-card-val" style="color: #6366f1;">${sickDays}</div>
+            <div class="info-card-footer">Medical leaves available</div>
+          </div>
+
+          <div class="info-card glass" style="border-left: 4px solid var(--status-present);">
+            <div class="info-card-header">
+              <span>Attendance Rate</span>
+              ${ICONS.attendance}
+            </div>
+            <div class="info-card-val" style="color: var(--status-present);">96%</div>
+            <div class="info-card-footer">Based on this calendar month</div>
+          </div>
+
+          <div class="glass" style="grid-column: span 3; padding: 24px; min-height: 240px; margin-top: 4px;">
+            <h4 style="margin-bottom: 16px; font-weight: 600;">Your Recent Time Off Requests</h4>
+            <div class="data-table-container">
+              <table class="data-table">
+                <thead>
+                  <tr>
+                    <th>Dates</th>
+                    <th>Type</th>
+                    <th>Status</th>
+                    <th>Remarks</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  ${window.store.state.timeOff.filter(l => l.employeeId === user.id).slice(0, 3).map(l => `
+                    <tr>
+                      <td>${l.startDate} to ${l.endDate}</td>
+                      <td>${l.leaveType}</td>
+                      <td><span class="status-badge ${l.status.toLowerCase()}">${l.status}</span></td>
+                      <td style="color: var(--text-muted); font-size: 0.85rem;">${l.remarks || 'N/A'}</td>
+                    </tr>
+                  `).join("") || `
+                    <tr>
+                      <td colspan="4" style="text-align: center; color: var(--text-muted); padding: 18px;">
+                        No leaves applied recently.
+                      </td>
+                    </tr>
+                  `}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
+  window.renderApp(`
+    ${sidebarHTML}
+    <div class="main-wrapper" data-layout="main">
+      ${headerHTML}
+      <div class="view-container">
+        ${dashboardContent}
+      </div>
+    </div>
+  `);
+
+  startDashboardClock();
+}
+window.renderDashboardView = renderDashboardView;
+
+export let clockInterval = null;
+export function startDashboardClock() {
+  if (clockInterval) clearInterval(clockInterval);
+  const clockDisp = document.getElementById("clock-display");
+  if (!clockDisp) return;
+  
+  const user = window.store.getCurrentUser();
+  const updateClock = () => {
+    const attendanceRecord = window.store.getAttendanceToday(user.id);
+    const isCheckedIn = attendanceRecord && !attendanceRecord.checkOut;
+    
+    if (isCheckedIn) {
+      const checkInMs = parseTimeToMs(attendanceRecord.checkIn);
+      const elapsedMs = Date.now() - checkInMs;
+      const elapsedSecs = Math.max(0, Math.floor(elapsedMs / 1000));
+      const h = Math.floor(elapsedSecs / 3600);
+      const m = Math.floor((elapsedSecs % 3600) / 60);
+      const s = elapsedSecs % 60;
+      clockDisp.textContent = [h, m, s].map(v => String(v).padStart(2, '0')).join(':');
+    } else {
+      const now = new Date();
+      clockDisp.textContent = now.toTimeString().split(" ")[0];
+    }
+  };
+  updateClock();
+  clockInterval = setInterval(updateClock, 1000);
+}
+window.startDashboardClock = startDashboardClock;
+
+export function handleClockTrigger() {
+  const user = window.store.getCurrentUser();
+  const attendanceToday = window.store.getAttendanceToday(user.id);
+  const isCheckedIn = attendanceToday && !attendanceToday.checkOut;
+
+  if (!isCheckedIn) {
+    window.store.checkIn(user.id);
+  } else {
+    window.store.checkOut(user.id);
+  }
+  renderDashboardView();
+}
+window.handleClockTrigger = handleClockTrigger;
+
+export function renderEmployeesView() {
+  const user = window.store.getCurrentUser();
+  const sidebarHTML = getSidebarHTML("employees");
+  const headerHTML = getHeaderHTML("Employee Directory");
+  
+  const isAdmin = user.role === "HR";
+  const employees = window.store.state.employees;
+
+  window.renderApp(`
+    ${sidebarHTML}
+    <div class="main-wrapper" data-layout="main">
+      ${headerHTML}
+      <div class="view-container">
+        <div class="directory-actions animate-fade">
+          <div class="search-filter-grp">
+            <input class="input-ctrl" type="text" id="employee-search" oninput="filterEmployees()" placeholder="Search employee name, department, ID...">
+            <select class="input-ctrl" id="employee-filter-status" onchange="filterEmployees()" style="width: 160px;">
+              <option value="all">All Statuses</option>
+              <option value="Present">Present</option>
+              <option value="Leave">On Leave</option>
+              <option value="Absent">Absent</option>
+            </select>
+          </div>
+          ${isAdmin ? `<button class="btn btn-primary" onclick="showOnboardModal()">${ICONS.plus} Add Employee</button>` : ""}
+        </div>
+
+        <div class="employee-grid animate-fade" id="employee-grid-container">
+          ${employees.map(emp => getEmployeeCardHTML(emp)).join("")}
+        </div>
+      </div>
+    </div>
+  `);
+}
+window.renderEmployeesView = renderEmployeesView;
+
+export function getEmployeeCardHTML(emp) {
+  const initials = emp.name.split(" ").map(n => n[0]).join("").substring(0, 2).toUpperCase();
+  const avatarSrc = emp.avatar || window.getCachedAvatar?.(emp.id, initials) || `data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100"><circle cx="50" cy="50" r="50" fill="%231f2937"/><text x="50" y="55" font-family="'Outfit', sans-serif" font-size="32" font-weight="700" fill="%236366f1" text-anchor="middle" dominant-baseline="middle">${initials}</text></svg>`;
+  
+  let statusClass = "absent";
+  const todayStr = getTodayString();
+  const onLeave = window.store.state.timeOff.some(l => 
+    l.employeeId === emp.id && 
+    l.status === "Approved" && 
+    todayStr >= l.startDate && 
+    todayStr <= l.endDate
+  );
+  
+  if (onLeave) {
+    statusClass = "leave";
+  } else {
+    const hasCheckedIn = window.store.state.attendance.some(a => a.employeeId === emp.id && a.date === todayStr);
+    if (hasCheckedIn) {
+      statusClass = "present";
+    }
+  }
+
+  return `
+    <div class="employee-card glass glow-accent" onclick="router.navigate('profile', { id: '${emp.id}' })">
+      <span class="card-status-dot ${statusClass}"></span>
+      <img class="card-avatar" src="${avatarSrc}" alt="Avatar">
+      <h4 class="card-name">${emp.name}</h4>
+      <span class="card-role">${emp.role === 'HR' ? 'HR Manager' : emp.role}</span>
+      <span style="font-size: 0.8rem; color: var(--text-muted);">${emp.department}</span>
+      <span class="card-id">${emp.id}</span>
+    </div>
+  `;
+}
+window.getEmployeeCardHTML = getEmployeeCardHTML;
+
+export function filterEmployees() {
+  const query = document.getElementById("employee-search").value.toLowerCase();
+  const statusFilter = document.getElementById("employee-filter-status").value;
+  const grid = document.getElementById("employee-grid-container");
+  if (!grid) return;
+
+  const todayStr = getTodayString();
+  const filtered = window.store.state.employees.filter(emp => {
+    let status = "Absent";
+    const onLeave = window.store.state.timeOff.some(l => 
+      l.employeeId === emp.id && 
+      l.status === "Approved" && 
+      todayStr >= l.startDate && 
+      todayStr <= l.endDate
+    );
+    if (onLeave) {
+      status = "Leave";
+    } else {
+      const checkedIn = window.store.state.attendance.some(a => a.employeeId === emp.id && a.date === todayStr);
+      if (checkedIn) status = "Present";
+    }
+
+    const matchesSearch = emp.name.toLowerCase().includes(query) || 
+                          emp.id.toLowerCase().includes(query) || 
+                          emp.department.toLowerCase().includes(query) ||
+                          emp.role.toLowerCase().includes(query);
+                          
+    const matchesStatus = statusFilter === "all" || status === statusFilter;
+
+    return matchesSearch && matchesStatus;
+  });
+
+  grid.innerHTML = filtered.map(emp => getEmployeeCardHTML(emp)).join("");
+}
+window.filterEmployees = filterEmployees;
+
+export function showOnboardModal() {
+  const formHTML = `
+    <form id="onboard-form" onsubmit="handleOnboardSubmit(event)">
+      <div class="form-group">
+        <label for="new-name">Full Name</label>
+        <input class="input-ctrl" type="text" id="new-name" required placeholder="e.g. Jane Doe">
+      </div>
+
+      <div class="form-row">
+        <div class="form-group">
+          <label for="new-email">Corporate Email</label>
+          <input class="input-ctrl" type="email" id="new-email" required placeholder="jane.doe@odoo.com">
+        </div>
+        <div class="form-group">
+          <label for="new-phone">Mobile Phone</label>
+          <input class="input-ctrl" type="text" id="new-phone" required placeholder="+91 XXXXX XXXXX">
+        </div>
+      </div>
+
+      <div class="form-row">
+        <div class="form-group">
+          <label for="new-role">Role</label>
+          <select class="input-ctrl" id="new-role" required>
+            <option value="Employee">Employee</option>
+            <option value="HR">HR Officer / Admin</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label for="new-dept">Department</label>
+          <input class="input-ctrl" type="text" id="new-dept" required placeholder="e.g. Engineering">
+        </div>
+      </div>
+
+      <div class="form-row">
+        <div class="form-group">
+          <label for="new-manager">Reporting Manager</label>
+          <input class="input-ctrl" type="text" id="new-manager" required placeholder="Manager Name">
+        </div>
+        <div class="form-group">
+          <label for="new-location">Work Location</label>
+          <input class="input-ctrl" type="text" id="new-location" required placeholder="e.g. Bangalore Campus">
+        </div>
+      </div>
+
+      <div class="form-row">
+        <div class="form-group">
+          <label for="new-doj">Date of Joining</label>
+          <input class="input-ctrl" type="date" id="new-doj" required value="${getTodayString()}">
+        </div>
+        <div class="form-group">
+          <label for="new-wage">Monthly Base Wage (INR)</label>
+          <input class="input-ctrl" type="number" id="new-wage" required placeholder="e.g. 75000">
+        </div>
+      </div>
+
+      <div class="form-group">
+        <label for="new-pass">Temporary Login Password</label>
+        <input class="input-ctrl" type="text" id="new-pass" required placeholder="Set temporary login password">
+      </div>
+
+      <div style="display: flex; justify-content: flex-end; gap: 12px; margin-top: 24px;">
+        <button class="btn btn-secondary" type="button" onclick="closeModal()">Cancel</button>
+        <button class="btn btn-primary" type="submit">Onboard & Create ID</button>
+      </div>
+    </form>
+  `;
+
+  showModal("Onboard New Employee", formHTML);
+}
+window.showOnboardModal = showOnboardModal;
+
+export async function handleOnboardSubmit(e) {
+  e.preventDefault();
+  
+  const newEmp = {
+    id: "",
+    name: document.getElementById("new-name").value.trim(),
+    email: document.getElementById("new-email").value.trim(),
+    phone: document.getElementById("new-phone").value.trim(),
+    role: document.getElementById("new-role").value,
+    department: document.getElementById("new-dept").value.trim(),
+    manager: document.getElementById("new-manager").value.trim(),
+    location: document.getElementById("new-location").value.trim(),
+    dateOfJoining: document.getElementById("new-doj").value,
+    wage: parseFloat(document.getElementById("new-wage").value),
+    dob: "1995-01-01",
+    address: "Provide address",
+    nationality: "Indian",
+    gender: "Male",
+    maritalStatus: "Single",
+    bankName: "TBD",
+    accountNo: "TBD",
+    ifsc: "TBD",
+    pan: "TBD",
+    uan: "",
+    esic: "",
+    avatar: ""
+  };
+
+  const pass = document.getElementById("new-pass").value;
+
+  const added = await window.store.addEmployee(newEmp, pass);
+  closeModal();
+  
+  if (window.location.hash.substring(1) === "employees") {
+    renderEmployeesView();
+  } else {
+    window.router.navigate("employees");
+  }
+
+  alert(`Employee Successfully Created!\nGenerated Login ID: ${added.id}`);
+}
+window.handleOnboardSubmit = handleOnboardSubmit;
+
+export function renderProfileView({ id }) {
+  const user = window.store.getCurrentUser();
+  const emp = window.store.getEmployee(id);
+  if (!emp) {
+    window.router.navigate("dashboard");
+    return;
+  }
+
+  const sidebarHTML = getSidebarHTML("employees");
+  const headerHTML = getHeaderHTML("Employee Profile");
+
+  const isAdmin = user.role === "HR";
+  const isSelf = user.id === emp.id;
+
+  const initials = emp.name.split(" ").map(n => n[0]).join("").substring(0, 2).toUpperCase();
+  const avatarSrc = emp.avatar || window.getCachedAvatar?.(emp.id, initials) || `data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100"><circle cx="50" cy="50" r="50" fill="%231f2937"/><text x="50" y="55" font-family="'Outfit', sans-serif" font-size="32" font-weight="700" fill="%236366f1" text-anchor="middle" dominant-baseline="middle">${initials}</text></svg>`;
+
+  window.renderApp(`
+    ${sidebarHTML}
+    <div class="main-wrapper" data-layout="main">
+      ${headerHTML}
+      <div class="view-container">
+        <div class="profile-layout animate-fade">
+          <!-- Profile Card -->
+          <div class="profile-sidebar glass">
+            <div class="profile-avatar-wrapper" onclick="triggerAvatarUpload('${emp.id}')" style="cursor: ${(isAdmin || isSelf) ? 'pointer' : 'default'};">
+              <img id="profile-avatar-img" class="profile-page-avatar" src="${avatarSrc}" alt="Avatar">
+              ${(isAdmin || isSelf) ? '<div class="avatar-overlay">Change</div>' : ''}
+              <input type="file" id="avatar-input" style="display: none;" onchange="handleAvatarChange(event, '${emp.id}')" accept="image/*">
+            </div>
+            <h3 class="profile-name">${emp.name}</h3>
+            <span class="profile-role-badge">${emp.role === 'HR' ? 'HR Manager' : emp.role}</span>
+            <div style="font-family: var(--font-mono); font-size: 0.8rem; color: var(--text-muted); margin-bottom: 24px;">ID: ${emp.id}</div>
+          </div>
+
+          <!-- Profile Details Panel -->
+          <div class="profile-main-panel">
+            <div class="tab-btn-group">
+              <button class="tab-btn active" onclick="switchProfileTab(event, 'general-info')">General Details</button>
+              <button class="tab-btn" onclick="switchProfileTab(event, 'salary-info')">Compensation & Bank</button>
+              ${isSelf ? '<button class="tab-btn" onclick="switchProfileTab(event, ' + "'security-info'" + ')">Security</button>' : ''}
+            </div>
+
+            <!-- Tab 1: General Info -->
+            <div id="general-info" class="tab-content active glass" style="padding: 32px;">
+              <h4 style="margin-bottom: 24px; font-weight: 600; color: var(--accent);">Corporate Specifications</h4>
+              <form id="profile-form" onsubmit="handleProfileUpdate(event, '${emp.id}')">
+                <div class="form-row">
+                  <div class="form-group">
+                    <label>Login ID</label>
+                    <input class="input-ctrl" type="text" value="${emp.id}" readonly>
+                  </div>
+                  <div class="form-group">
+                    <label>Corporate Email</label>
+                    <input class="input-ctrl" type="email" id="profile-email" value="${emp.email}" ${isAdmin ? '' : 'readonly'}>
+                  </div>
+                </div>
+
+                <div class="form-row">
+                  <div class="form-group">
+                    <label>Primary Role</label>
+                    <input class="input-ctrl" type="text" id="profile-role" value="${emp.role}" ${isAdmin ? '' : 'readonly'}>
+                  </div>
+                  <div class="form-group">
+                    <label>Department</label>
+                    <input class="input-ctrl" type="text" id="profile-dept" value="${emp.department}" ${isAdmin ? '' : 'readonly'}>
+                  </div>
+                </div>
+
+                <div class="form-row">
+                  <div class="form-group">
+                    <label>Reporting Manager</label>
+                    <input class="input-ctrl" type="text" id="profile-manager" value="${emp.manager}" ${isAdmin ? '' : 'readonly'}>
+                  </div>
+                  <div class="form-group">
+                    <label>Work Location</label>
+                    <input class="input-ctrl" type="text" id="profile-location" value="${emp.location}" ${isAdmin ? '' : 'readonly'}>
+                  </div>
+                </div>
+
+                <h4 style="margin-top: 32px; margin-bottom: 20px; font-weight: 600; color: var(--accent);">Personal Specifications</h4>
+                
+                <div class="form-row">
+                  <div class="form-group">
+                    <label>Mobile Contact</label>
+                    <input class="input-ctrl" type="text" id="profile-phone" value="${emp.phone}" ${(isAdmin || isSelf) ? '' : 'readonly'}>
+                  </div>
+                  <div class="form-group">
+                    <label>Personal Email</label>
+                    <input class="input-ctrl" type="email" id="profile-pemail" value="${emp.personalEmail || ''}" ${(isAdmin || isSelf) ? '' : 'readonly'}>
+                  </div>
+                </div>
+
+                <div class="form-row">
+                  <div class="form-group">
+                    <label>Date of Birth</label>
+                    <input class="input-ctrl" type="date" id="profile-dob" value="${emp.dob || ''}" ${(isAdmin || isSelf) ? '' : 'readonly'}>
+                  </div>
+                  <div class="form-group">
+                    <label>Gender</label>
+                    <select class="input-ctrl" id="profile-gender" ${(isAdmin || isSelf) ? '' : 'disabled'}>
+                      <option value="Male" ${emp.gender === 'Male' ? 'selected' : ''}>Male</option>
+                      <option value="Female" ${emp.gender === 'Female' ? 'selected' : ''}>Female</option>
+                      <option value="Other" ${emp.gender === 'Other' ? 'selected' : ''}>Other</option>
+                    </select>
+                  </div>
+                </div>
+
+                <div class="form-row">
+                  <div class="form-group">
+                    <label>Nationality</label>
+                    <input class="input-ctrl" type="text" id="profile-nation" value="${emp.nationality || 'Indian'}" ${(isAdmin || isSelf) ? '' : 'readonly'}>
+                  </div>
+                  <div class="form-group">
+                    <label>Marital Status</label>
+                    <select class="input-ctrl" id="profile-marital" ${(isAdmin || isSelf) ? '' : 'disabled'}>
+                      <option value="Single" ${emp.maritalStatus === 'Single' ? 'selected' : ''}>Single</option>
+                      <option value="Married" ${emp.maritalStatus === 'Married' ? 'selected' : ''}>Married</option>
+                      <option value="Divorced" ${emp.maritalStatus === 'Divorced' ? 'selected' : ''}>Divorced</option>
+                    </select>
+                  </div>
+                </div>
+
+                <div class="form-row">
+                  <div class="form-group">
+                    <label>UAN (Universal Account Number)</label>
+                    <input class="input-ctrl" type="text" id="profile-uan" placeholder="12-digit EPF UAN" value="${emp.uan || ''}" ${(isAdmin || isSelf) ? '' : 'readonly'}>
+                  </div>
+                  <div class="form-group">
+                    <label>ESIC Number</label>
+                    <input class="input-ctrl" type="text" id="profile-esic" placeholder="17-digit ESIC ID" value="${emp.esic || ''}" ${(isAdmin || isSelf) ? '' : 'readonly'}>
+                  </div>
+                </div>
+
+                <div class="form-group">
+                  <label>Mailing Address</label>
+                  <input class="input-ctrl" type="text" id="profile-address" value="${emp.address || ''}" ${(isAdmin || isSelf) ? '' : 'readonly'}>
+                </div>
+
+                ${(isAdmin || isSelf) ? `
+                  <div style="display: flex; justify-content: flex-end; margin-top: 24px;">
+                    <button class="btn btn-primary" type="submit">Save Profile Changes</button>
+                  </div>
+                ` : ""}
+              </form>
+            </div>
+
+            <!-- Tab 2: Salary Structure Calculations -->
+            <div id="salary-info" class="tab-content glass" style="padding: 32px;">
+              <h4 style="margin-bottom: 24px; font-weight: 600; color: var(--accent);">Salary Component breakdown</h4>
+              
+              <div class="form-row" style="margin-bottom: 24px;">
+                <div class="form-group">
+                  <label>Monthly Gross Wage (INR)</label>
+                  <input class="input-ctrl" type="number" id="salary-wage-input" value="${emp.wage || 0}" ${isAdmin ? '' : 'readonly'} oninput="recalculateSalaryDisplay()">
+                </div>
+                <div class="form-group">
+                  <label>Schedule Work Time</label>
+                  <input class="input-ctrl" type="text" value="8 Hours/day (5 days a week)" readonly>
+                </div>
+              </div>
+
+              <div class="salary-breakdown-box" id="salary-breakdown-box-view">
+                <!-- Dynamic salary components are rendered here -->
+              </div>
+
+              <h4 style="margin-top: 32px; margin-bottom: 20px; font-weight: 600; color: var(--accent);">Bank Verification Fields</h4>
+              <form id="profile-bank-form" onsubmit="handleBankUpdate(event, '${emp.id}')">
+                <div class="form-row">
+                  <div class="form-group">
+                    <label>Bank Name</label>
+                    <input class="input-ctrl" type="text" id="bank-name-input" value="${emp.bankName || ''}" ${isAdmin ? '' : 'readonly'}>
+                  </div>
+                  <div class="form-group">
+                    <label>Account Number</label>
+                    <input class="input-ctrl" type="text" id="bank-account-input" value="${emp.accountNo || ''}" ${isAdmin ? '' : 'readonly'}>
+                  </div>
+                </div>
+
+                <div class="form-row">
+                  <div class="form-group">
+                    <label>IFSC Code</label>
+                    <input class="input-ctrl" type="text" id="bank-ifsc-input" value="${emp.ifsc || ''}" ${isAdmin ? '' : 'readonly'}>
+                  </div>
+                  <div class="form-group">
+                    <label>PAN Card Details</label>
+                    <input class="input-ctrl" type="text" id="bank-pan-input" value="${emp.pan || ''}" ${isAdmin ? '' : 'readonly'}>
+                  </div>
+                </div>
+
+                ${isAdmin ? `
+                  <div style="display: flex; justify-content: flex-end; margin-top: 24px;">
+                    <button class="btn btn-primary" type="submit">Update Compensation & Banking</button>
+                  </div>
+                ` : ""}
+              </form>
+            </div>
+
+            <!-- Tab 3: Security & Credentials Changes -->
+            <div id="security-info" class="tab-content glass" style="padding: 32px;">
+              <h4 style="margin-bottom: 20px; font-weight: 600; color: var(--accent);">Change System Login Password</h4>
+              <form id="profile-security-form" onsubmit="handlePasswordUpdate(event, '${emp.id}')">
+                <div class="form-group">
+                  <label for="current-password">Current Password</label>
+                  <input class="input-ctrl" type="password" id="current-password" required placeholder="Enter current login password">
+                </div>
+                
+                <div class="form-group">
+                  <label for="new-password">New Password</label>
+                  <input class="input-ctrl" type="password" id="new-password-input" required placeholder="Min 6 characters">
+                </div>
+
+                <div class="form-group">
+                  <label for="confirm-new-password">Confirm New Password</label>
+                  <input class="input-ctrl" type="password" id="confirm-password-input" required placeholder="Confirm new password">
+                </div>
+
+                <div style="display: flex; justify-content: flex-end; margin-top: 24px;">
+                  <button class="btn btn-primary" type="submit">Update Password Credentials</button>
+                </div>
+              </form>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  `);
+
+  recalculateSalaryDisplay();
+}
+window.renderProfileView = renderProfileView;
+
+export function switchProfileTab(e, tabId) {
+  const tabs = e.target.parentElement.querySelectorAll(".tab-btn");
+  tabs.forEach(btn => btn.classList.remove("active"));
+  
+  const contents = e.target.parentElement.parentElement.querySelectorAll(".tab-content");
+  contents.forEach(cnt => cnt.classList.remove("active"));
+  
+  e.target.classList.add("active");
+  const contentEl = document.getElementById(tabId);
+  if (contentEl) contentEl.classList.add("active");
+}
+window.switchProfileTab = switchProfileTab;
+
+export function triggerAvatarUpload(empId) {
+  const user = window.store.getCurrentUser();
+  if (user.role === "HR" || user.id === empId) {
+    const input = document.getElementById("avatar-input");
+    if (input) input.click();
+  }
+}
+window.triggerAvatarUpload = triggerAvatarUpload;
+
+export function handleAvatarChange(e, empId) {
+  const file = e.target.files[0];
+  if (!file) return;
+
+  const reader = new FileReader();
+  reader.onload = function(evt) {
+    const base64 = evt.target.result;
+    window.store.updateEmployee(empId, { avatar: base64 });
+    const img = document.getElementById("profile-avatar-img");
+    if (img) img.src = base64;
+  };
+  reader.readAsDataURL(file);
+}
+window.handleAvatarChange = handleAvatarChange;
+
+export function handleProfileUpdate(e, empId) {
+  e.preventDefault();
+  
+  const updated = {
+    name: window.store.getEmployee(empId).name,
+    phone: document.getElementById("profile-phone").value.trim(),
+    personalEmail: document.getElementById("profile-pemail").value.trim(),
+    dob: document.getElementById("profile-dob").value,
+    gender: document.getElementById("profile-gender").value,
+    maritalStatus: document.getElementById("profile-marital").value,
+    address: document.getElementById("profile-address").value.trim(),
+    nationality: document.getElementById("profile-nation").value.trim(),
+    uan: document.getElementById("profile-uan").value.trim(),
+    esic: document.getElementById("profile-esic").value.trim()
+  };
+
+  const user = window.store.getCurrentUser();
+  if (user.role === "HR") {
+    updated.email = document.getElementById("profile-email").value.trim();
+    updated.role = document.getElementById("profile-role").value.trim();
+    updated.department = document.getElementById("profile-dept").value.trim();
+    updated.manager = document.getElementById("profile-manager").value.trim();
+    updated.location = document.getElementById("profile-location").value.trim();
+  }
+
+  window.store.updateEmployee(empId, updated);
+  alert("Employee Profile updated successfully!");
+}
+window.handleProfileUpdate = handleProfileUpdate;
+
+export function recalculateSalaryDisplay() {
+  const wageInput = document.getElementById("salary-wage-input");
+  if (!wageInput) return;
+  
+  const wage = parseFloat(wageInput.value) || 0;
+  const locationInput = document.getElementById("profile-location") || document.getElementById("new-location");
+  const location = locationInput ? locationInput.value : "";
+  const calc = getSalaryBreakdown(wage, { location });
+
+  const breakdownBox = document.getElementById("salary-breakdown-box-view");
+  if (breakdownBox) {
+    breakdownBox.innerHTML = `
+      <div class="salary-group">
+        <div class="salary-group-title">Earnings Breakdown</div>
+        <div class="salary-row">
+          <span class="salary-label">Basic Salary (50% base)</span>
+          <span class="salary-val">₹${calc.basic}</span>
+        </div>
+        <div class="salary-row">
+          <span class="salary-label">HRA Allowance (40% Basic)</span>
+          <span class="salary-val">₹${calc.hra}</span>
+        </div>
+        <div class="salary-row">
+          <span class="salary-label">Standard Allowance (10% Wage)</span>
+          <span class="salary-val">₹${calc.standard}</span>
+        </div>
+        <div class="salary-row">
+          <span class="salary-label">Performance Bonus (15% Basic)</span>
+          <span class="salary-val">₹${calc.bonus}</span>
+        </div>
+        <div class="salary-row">
+          <span class="salary-label">LTA Allowance (8.33% Basic)</span>
+          <span class="salary-val">₹${calc.lta}</span>
+        </div>
+        <div class="salary-row" style="border-top: 1px solid var(--border-light); font-weight: 700;">
+          <span class="salary-label" style="color: var(--text-main);">Fixed Allowance (Remainder)</span>
+          <span class="salary-val">₹${calc.fixed}</span>
+        </div>
+      </div>
+
+      <div class="salary-group">
+        <div class="salary-group-title">Contributions & Deductions</div>
+        <div class="salary-row">
+          <span class="salary-label">Employer PF Contribution (12%)</span>
+          <span class="salary-val">₹${calc.employerPf}</span>
+        </div>
+        <div class="salary-row">
+          <span class="salary-label">Employee PF Deduction (12%)</span>
+          <span class="salary-val deduct">₹${calc.employeePf}</span>
+        </div>
+        <div class="salary-row">
+          <span class="salary-label">Professional Tax (PT)</span>
+          <span class="salary-val deduct">₹${calc.pt}</span>
+        </div>
+        <div class="salary-row" style="border-top: 1px solid var(--border-light); font-weight: 700; margin-top: 24px;">
+          <span class="salary-label" style="color: var(--text-main);">Net Monthly Take-Home</span>
+          <span class="salary-val highlight">₹${calc.netSalary}</span>
+        </div>
+      </div>
+    `;
+  }
+}
+window.recalculateSalaryDisplay = recalculateSalaryDisplay;
+
+export function handleBankUpdate(e, empId) {
+  e.preventDefault();
+  
+  const wageInput = document.getElementById("salary-wage-input");
+  const wage = parseFloat(wageInput.value) || 0;
+  
+  const bankDetails = {
+    wage: wage,
+    bankName: document.getElementById("bank-name-input").value.trim(),
+    accountNo: document.getElementById("bank-account-input").value.trim(),
+    ifsc: document.getElementById("bank-ifsc-input").value.trim(),
+    pan: document.getElementById("bank-pan-input").value.trim()
+  };
+
+  window.store.updateEmployee(empId, bankDetails);
+  alert("Banking & Compensation criteria updated!");
+}
+window.handleBankUpdate = handleBankUpdate;
+
+export async function handlePasswordUpdate(e, empId) {
+  e.preventDefault();
+  const current = document.getElementById("current-password").value;
+  const newPass = document.getElementById("new-password-input").value;
+  const confirm = document.getElementById("confirm-password-input").value;
+
+  const userAccount = window.store.state.users.find(u => u.employeeId === empId);
+  const currentHash = await window.sha256?.(current) || current; // fallback if sha256 not bound yet
+  
+  if (userAccount.password !== currentHash) {
+    alert("The current password entered is incorrect!");
+    return;
+  }
+
+  if (newPass.length < 6) {
+    alert("New password must be at least 6 characters long.");
+    return;
+  }
+
+  if (newPass !== confirm) {
+    alert("Confirm password does not match the new password.");
+    return;
+  }
+
+  userAccount.password = await window.sha256?.(newPass) || newPass;
+  window.store.saveState();
+  
+  document.getElementById("profile-security-form").reset();
+  alert("Credentials security profile updated successfully!");
+}
+window.handlePasswordUpdate = handlePasswordUpdate;
+
+export function renderAttendanceView() {
+  const user = window.store.getCurrentUser();
+  const sidebarHTML = getSidebarHTML("attendance");
+  const headerHTML = getHeaderHTML("Attendance logs");
+
+  const isAdmin = user.role === "HR";
+  let attendanceContent = "";
+
+  if (isAdmin) {
+    const logs = window.store.state.attendance;
+    
+    attendanceContent = `
+      <div class="animate-fade">
+        <div class="directory-actions">
+          <div class="search-filter-grp">
+            <input class="input-ctrl" type="date" id="attendance-date-search" value="${getTodayString()}" onchange="filterAdminAttendance()">
+            <input class="input-ctrl" type="text" id="attendance-emp-search" placeholder="Search by Employee ID or Name..." oninput="filterAdminAttendance()">
+          </div>
+        </div>
+
+        <div class="data-table-container glass">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>Date</th>
+                <th>Employee ID</th>
+                <th>Employee Name</th>
+                <th>Check In</th>
+                <th>Check Out</th>
+                <th>Logged Hours</th>
+                <th>Extra Hours</th>
+                <th>Status</th>
+              </tr>
+            </thead>
+            <tbody id="attendance-table-body">
+              ${logs.map(log => {
+                const emp = window.store.getEmployee(log.employeeId);
+                const empName = emp ? emp.name : "Unknown Employee";
+                return `
+                  <tr>
+                    <td><strong>${log.date}</strong></td>
+                    <td style="font-family: var(--font-mono); font-size: 0.85rem;">${log.employeeId}</td>
+                    <td>${empName}</td>
+                    <td>${log.checkIn || '--:--'}</td>
+                    <td>${log.checkOut || '--:--'}</td>
+                    <td>${log.workHours ? `${log.workHours} hrs` : '--:--'}</td>
+                    <td>${log.extraHours ? `${log.extraHours} hrs` : '--:--'}</td>
+                    <td><span class="status-badge approved">${log.status}</span></td>
+                  </tr>
+                `;
+              }).join("") || `
+                <tr>
+                  <td colspan="8" style="text-align: center; color: var(--text-muted); padding: 32px;">
+                    No logs have been recorded in this space.
+                  </td>
+                </tr>
+              `}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    `;
+  } else {
+    const logs = window.store.state.attendance.filter(a => a.employeeId === user.id);
+    
+    attendanceContent = `
+      <div class="animate-fade">
+        <h4 style="margin-bottom: 16px; font-weight: 600;">Your Check-in / Out logs</h4>
+        <div class="data-table-container glass">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>Date</th>
+                <th>Check In</th>
+                <th>Check Out</th>
+                <th>Work Hours</th>
+                <th>Extra Overtime</th>
+                <th>Status</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${logs.map(log => `
+                <tr>
+                  <td><strong>${log.date}</strong></td>
+                  <td>${log.checkIn || '--:--'}</td>
+                  <td>${log.checkOut || '--:--'}</td>
+                  <td>${log.workHours ? `${log.workHours} hrs` : '--:--'}</td>
+                  <td>${log.extraHours ? `${log.extraHours} hrs` : '--:--'}</td>
+                  <td><span class="status-badge approved">${log.status}</span></td>
+                </tr>
+              `).join("") || `
+                <tr>
+                  <td colspan="6" style="text-align: center; color: var(--text-muted); padding: 32px;">
+                    You have not recorded any attendance logs yet. Use the clock on the Dashboard page!
+                  </td>
+                </tr>
+              `}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    `;
+  }
+
+  window.renderApp(`
+    ${sidebarHTML}
+    <div class="main-wrapper" data-layout="main">
+      ${headerHTML}
+      <div class="view-container">
+        ${attendanceContent}
+      </div>
+    </div>
+  `);
+}
+window.renderAttendanceView = renderAttendanceView;
+
+export function filterAdminAttendance() {
+  const dateVal = document.getElementById("attendance-date-search").value;
+  const searchVal = document.getElementById("attendance-emp-search").value.toLowerCase();
+  const tbody = document.getElementById("attendance-table-body");
+  if (!tbody) return;
+
+  const filtered = window.store.state.attendance.filter(log => {
+    const emp = window.store.getEmployee(log.employeeId);
+    const empName = emp ? emp.name.toLowerCase() : "";
+    
+    const dateMatch = !dateVal || log.date === dateVal;
+    const searchMatch = !searchVal || 
+                        log.employeeId.toLowerCase().includes(searchVal) || 
+                        empName.includes(searchVal);
+
+    return dateMatch && searchMatch;
+  });
+
+  tbody.innerHTML = filtered.map(log => {
+    const emp = window.store.getEmployee(log.employeeId);
+    const empName = emp ? emp.name : "Unknown Employee";
+    return `
+      <tr>
+        <td><strong>${log.date}</strong></td>
+        <td style="font-family: var(--font-mono); font-size: 0.85rem;">${log.employeeId}</td>
+        <td>${empName}</td>
+        <td>${log.checkIn || '--:--'}</td>
+        <td>${log.checkOut || '--:--'}</td>
+        <td>${log.workHours ? `${log.workHours} hrs` : '--:--'}</td>
+        <td>${log.extraHours ? `${log.extraHours} hrs` : '--:--'}</td>
+        <td><span class="status-badge approved">${log.status}</span></td>
+      </tr>
+    `;
+  }).join("") || `
+    <tr>
+      <td colspan="8" style="text-align: center; color: var(--text-muted); padding: 32px;">
+        No matching attendance records found.
+      </td>
+    </tr>
+  `;
+}
+window.filterAdminAttendance = filterAdminAttendance;
+
+export function renderTimeOffView() {
+  const user = window.store.getCurrentUser();
+  const sidebarHTML = getSidebarHTML("timeoff");
+  const headerHTML = getHeaderHTML("Time Off & Leave Balance");
+
+  const isAdmin = user.role === "HR";
+  let timeOffContent = "";
+
+  if (isAdmin) {
+    const requests = window.store.state.timeOff;
+
+    timeOffContent = `
+      <div class="animate-fade">
+        <h3 style="margin-bottom: 20px; font-weight: 600;">Workforce Leave Requests</h3>
+        
+        <div class="data-table-container glass">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>Employee ID</th>
+                <th>Name</th>
+                <th>Type</th>
+                <th>Duration</th>
+                <th>Span</th>
+                <th>Remarks</th>
+                <th>Attachment</th>
+                <th>Status</th>
+                <th>Action / Notes</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${requests.map(l => {
+                const fileLink = l.attachmentData ? 
+                  `<a href="${l.attachmentData}" download="${l.attachmentName}" style="color: var(--accent); font-weight: 600; text-decoration: none;">View File</a>` : 
+                  '<span style="color: var(--text-dim);">No Attachment</span>';
+
+                let actionsHTML = "";
+                if (l.status === "Pending") {
+                  actionsHTML = `
+                    <div style="display: flex; gap: 8px;">
+                      <button class="btn btn-success btn-sm" onclick="showApproveCommentModal('${l.id}', 'Approved')">Approve</button>
+                      <button class="btn btn-danger btn-sm" onclick="showApproveCommentModal('${l.id}', 'Rejected')">Reject</button>
+                    </div>
+                  `;
+                } else {
+                  actionsHTML = `<span style="color: var(--text-dim); font-size: 0.85rem;">${l.comment || 'Processed'}</span>`;
+                }
+
+                const displayDays = typeof l.days === 'number' ? `${l.days} Day(s)` : `${calculateDaysBetween(l.startDate, l.endDate)} Day(s)`;
+
+                return `
+                  <tr>
+                    <td style="font-family: var(--font-mono); font-size: 0.85rem;">${l.employeeId}</td>
+                    <td><strong>${l.employeeName}</strong></td>
+                    <td>${l.leaveType}</td>
+                    <td><strong>${l.startDate}</strong> to <strong>${l.endDate}</strong></td>
+                    <td><strong>${displayDays}</strong></td>
+                    <td>${l.remarks || '<span style="color: var(--text-dim);">None</span>'}</td>
+                    <td>${fileLink}</td>
+                    <td><span class="status-badge ${l.status.toLowerCase()}">${l.status}</span></td>
+                    <td>${actionsHTML}</td>
+                  </tr>
+                `;
+              }).join("") || `
+                <tr>
+                  <td colspan="9" style="text-align: center; color: var(--text-muted); padding: 32px;">
+                    No leave requests have been applied yet.
+                  </td>
+                </tr>
+              `}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    `;
+  } else {
+    const monthNames = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+    const monthLabel = `${monthNames[selectedCalendarDate.getMonth()]} ${selectedCalendarDate.getFullYear()}`;
+
+    timeOffContent = `
+      <div class="animate-fade">
+        <div class="timeoff-header">
+          <div class="info-card glass glow-accent">
+            <div class="info-card-header">
+              <span>Paid Time Off (PTO)</span>
+              ${ICONS.timeoff}
+            </div>
+            <div class="info-card-val" style="color: var(--status-present);">${user.ptoDays} Days</div>
+            <div class="info-card-footer">General paid leave balance remaining</div>
+          </div>
+          <div class="info-card glass">
+            <div class="info-card-header">
+              <span>Sick Leave Balance</span>
+              ${ICONS.timeoff}
+            </div>
+            <div class="info-card-val" style="color: var(--accent);">${user.sickDays} Days</div>
+            <div class="info-card-footer font-semibold">Allocated medical leave balance remaining</div>
+          </div>
+        </div>
+
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 24px;">
+          <h3 style="font-weight: 600;">Calendar Overview</h3>
+          <button class="btn btn-primary" onclick="showApplyLeaveModal()">${ICONS.plus} Apply for Leave</button>
+        </div>
+
+        <div class="glass" style="padding: 24px; margin-bottom: 32px;">
+          <div class="calendar-wrapper">
+            <div class="calendar-header">
+              <h4 style="font-weight: 600;" id="cal-month-title">${monthLabel}</h4>
+              <div style="display: flex; gap: 8px;">
+                <button class="calendar-nav-btn" onclick="changeCalendarMonth(-1)">&lt;</button>
+                <button class="calendar-nav-btn" onclick="changeCalendarMonth(1)">&gt;</button>
+              </div>
+            </div>
+            <div class="calendar-grid">
+              <div class="calendar-day-header">Sun</div>
+              <div class="calendar-day-header">Mon</div>
+              <div class="calendar-day-header">Tue</div>
+              <div class="calendar-day-header">Wed</div>
+              <div class="calendar-day-header">Thu</div>
+              <div class="calendar-day-header">Fri</div>
+              <div class="calendar-day-header">Sat</div>
+              
+              ${renderCalendarDays(selectedCalendarDate.getFullYear(), selectedCalendarDate.getMonth())}
+            </div>
+          </div>
+        </div>
+
+        <h3 style="margin-bottom: 16px; font-weight: 600;">Leave Requests Log</h3>
+        <div class="data-table-container glass">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>Type</th>
+                <th>Dates</th>
+                <th>Span</th>
+                <th>Remarks</th>
+                <th>Status</th>
+                <th>Approver Note</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${window.store.state.timeOff.filter(l => l.employeeId === user.id).map(l => {
+                const displayDays = typeof l.days === 'number' ? `${l.days} Day(s)` : `${calculateDaysBetween(l.startDate, l.endDate)} Day(s)`;
+                return `
+                  <tr>
+                    <td><strong>${l.leaveType}</strong></td>
+                    <td>${l.startDate} to ${l.endDate}</td>
+                    <td><strong>${displayDays}</strong></td>
+                    <td>${l.remarks || '<span style="color: var(--text-dim);">N/A</span>'}</td>
+                    <td><span class="status-badge ${l.status.toLowerCase()}">${l.status}</span></td>
+                    <td style="color: var(--text-muted); font-size: 0.85rem;">${l.comment || '--'}</td>
+                  </tr>
+                `;
+              }).join("") || `
+                <tr>
+                  <td colspan="6" style="text-align: center; color: var(--text-muted); padding: 32px;">
+                    You have not submitted any leave requests yet.
+                  </td>
+                </tr>
+              `}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    `;
+  }
+
+  window.renderApp(`
+    ${sidebarHTML}
+    <div class="main-wrapper" data-layout="main">
+      ${headerHTML}
+      <div class="view-container">
+        ${timeOffContent}
+      </div>
+    </div>
+  `);
+}
+window.renderTimeOffView = renderTimeOffView;
+
+export function changeCalendarMonth(offset) {
+  selectedCalendarDate.setMonth(selectedCalendarDate.getMonth() + offset);
+  renderTimeOffView();
+}
+window.changeCalendarMonth = changeCalendarMonth;
+
+export function renderCalendarDays(year, month) {
+  const user = window.store.getCurrentUser();
+  const days = [];
+  const todayStr = getTodayString();
+  
+  const daysInMonth = new Date(year, month + 1, 0).getDate();
+  const startDayOfWeek = new Date(year, month, 1).getDay();
+  
+  for (let i = 0; i < startDayOfWeek; i++) {
+    days.push(`<div class="calendar-day empty"></div>`);
+  }
+
+  const monthStr = String(month + 1).padStart(2, "0");
+  
+  for (let day = 1; day <= daysInMonth; day++) {
+    const dayStr = `${year}-${monthStr}-${String(day).padStart(2, "0")}`;
+    let dayClass = "";
+    const isAHoliday = isHoliday(dayStr);
+    
+    // Status checks
+    const onApprovedLeave = window.store.state.timeOff.some(l => 
+      l.employeeId === user.id && 
+      l.status === "Approved" && 
+      dayStr >= l.startDate && 
+      dayStr <= l.endDate
+    );
+
+    if (onApprovedLeave) {
+      dayClass = "leave-day";
+    } else if (isAHoliday) {
+      dayClass = "holiday-day";
+    } else {
+      const att = window.store.state.attendance.find(a => a.employeeId === user.id && a.date === dayStr);
+      if (att) {
+        dayClass = "present-day";
+      } else if (dayStr < todayStr) {
+        const dateObj = new Date(dayStr);
+        const isWeekend = dateObj.getDay() === 0 || dateObj.getDay() === 6;
+        if (!isWeekend) {
+          dayClass = "absent-day";
+        }
+      }
+    }
+
+    const isToday = dayStr === todayStr;
+
+    days.push(`
+      <div class="calendar-day ${dayClass} ${isToday ? 'today' : ''}" title="${isAHoliday ? NATIONAL_HOLIDAYS[dayStr] : ''}">
+        <span class="calendar-day-num">${day}</span>
+        ${isAHoliday ? `<span style="font-size: 0.6rem; color: var(--accent); display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${NATIONAL_HOLIDAYS[dayStr]}</span>` : ''}
+        ${dayClass && !isAHoliday ? '<span class="calendar-day-marker"></span>' : ''}
+      </div>
+    `);
+  }
+  return days.join("");
+}
+window.renderCalendarDays = renderCalendarDays;
+
+export function showApplyLeaveModal() {
+  const body = `
+    <form id="leave-form" onsubmit="handleLeaveSubmit(event)">
+      <div class="form-group">
+        <label for="leave-type">Leave Allocation Category</label>
+        <select class="input-ctrl" id="leave-type" required>
+          <option value="Paid Time Off">Paid Time Off (PTO)</option>
+          <option value="Sick Leave">Sick Leave</option>
+          <option value="Unpaid Leave">Unpaid Leaves</option>
+        </select>
+      </div>
+
+      <div class="form-group">
+        <label for="leave-duration">Leave Duration</label>
+        <select class="input-ctrl" id="leave-duration" onchange="toggleHalfDayOption()" required>
+          <option value="Full">Full Day</option>
+          <option value="FirstHalf">First Half-Day (Morning)</option>
+          <option value="SecondHalf">Second Half-Day (Afternoon)</option>
+        </select>
+      </div>
+
+      <div class="form-row">
+        <div class="form-group">
+          <label for="leave-start">Start Date</label>
+          <input class="input-ctrl" type="date" id="leave-start" required onchange="calculateRequestedDays()">
+        </div>
+        <div class="form-group">
+          <label for="leave-end">End Date</label>
+          <input class="input-ctrl" type="date" id="leave-end" required onchange="calculateRequestedDays()">
+        </div>
+      </div>
+
+      <div class="form-group">
+        <label>Leave Span Computed</label>
+        <input class="input-ctrl" type="text" id="leave-days-display" value="0 Days" readonly>
+      </div>
+
+      <div class="form-group">
+        <label for="leave-remarks">Reason for Absence</label>
+        <textarea class="input-ctrl" id="leave-remarks" rows="3" required placeholder="Add message context for HR approvals..."></textarea>
+      </div>
+
+      <div class="form-group">
+        <label for="leave-file">Certificate Attachment (Required for Sick Leave)</label>
+        <input class="input-ctrl" type="file" id="leave-file">
+      </div>
+
+      <div style="display: flex; justify-content: flex-end; gap: 12px; margin-top: 24px;">
+        <button class="btn btn-secondary" type="button" onclick="closeModal()">Cancel</button>
+        <button class="btn btn-primary" type="submit">Submit Request</button>
+      </div>
+    </form>
+  `;
+
+  showModal("Apply for Leave", body);
+}
+window.showApplyLeaveModal = showApplyLeaveModal;
+
+export function toggleHalfDayOption() {
+  const duration = document.getElementById("leave-duration").value;
+  const startEl = document.getElementById("leave-start");
+  const endEl = document.getElementById("leave-end");
+  if (duration !== "Full") {
+    endEl.value = startEl.value;
+    endEl.disabled = true;
+  } else {
+    endEl.disabled = false;
+  }
+  calculateRequestedDays();
+}
+window.toggleHalfDayOption = toggleHalfDayOption;
+
+export function calculateRequestedDays() {
+  const start = document.getElementById("leave-start").value;
+  const end = document.getElementById("leave-end").value;
+  const duration = document.getElementById("leave-duration")?.value || "Full";
+  const disp = document.getElementById("leave-days-display");
+  if (start) {
+    if (duration !== "Full") {
+      disp.value = "0.5 Days";
+      return;
+    }
+    if (end) {
+      if (end < start) {
+        disp.value = "Invalid Range";
+        return;
+      }
+      const days = calculateDaysBetween(start, end);
+      disp.value = `${days} Day${days > 1 ? 's' : ''}`;
+    }
+  }
+}
+window.calculateRequestedDays = calculateRequestedDays;
+
+export function handleLeaveSubmit(e) {
+  e.preventDefault();
+  const user = window.store.getCurrentUser();
+  
+  const lType = document.getElementById("leave-type").value;
+  const start = document.getElementById("leave-start").value;
+  const end = document.getElementById("leave-end").value;
+  const duration = document.getElementById("leave-duration").value;
+  const remarks = document.getElementById("leave-remarks").value.trim();
+  const fileEl = document.getElementById("leave-file");
+
+  if (duration === "Full" && end < start) {
+    alert("End Date cannot be before Start Date.");
+    return;
+  }
+
+  const days = duration !== "Full" ? 0.5 : calculateDaysBetween(start, end);
+
+  if (lType === "Paid Time Off" && user.ptoDays < days) {
+    alert(`Insufficient Paid Time Off balance! You have only ${user.ptoDays} days available.`);
+    return;
+  }
+  if (lType === "Sick Leave" && user.sickDays < days) {
+    alert(`Insufficient Sick Leave balance! You have only ${user.sickDays} days available.`);
+    return;
+  }
+
+  if (lType === "Sick Leave" && fileEl.files.length === 0) {
+    alert("Sick Leave requires a medical certificate upload.");
+    return;
+  }
+
+  const leaveData = {
+    employeeId: user.id,
+    employeeName: user.name,
+    leaveType: lType,
+    startDate: start,
+    endDate: duration !== "Full" ? start : end,
+    duration: duration,
+    days: days,
+    remarks: remarks,
+    attachmentName: "",
+    attachmentData: ""
+  };
+
+  if (fileEl.files.length > 0) {
+    const file = fileEl.files[0];
+    leaveData.attachmentName = file.name;
+
+    const reader = new FileReader();
+    reader.onload = function(evt) {
+      leaveData.attachmentData = evt.target.result;
+      window.store.applyLeave(leaveData);
+      closeModal();
+      renderTimeOffView();
+    };
+    reader.readAsDataURL(file);
+  } else {
+    window.store.applyLeave(leaveData);
+    closeModal();
+    renderTimeOffView();
+  }
+}
+window.handleLeaveSubmit = handleLeaveSubmit;
+
+export function showApproveCommentModal(leaveId, action) {
+  const body = `
+    <div class="form-group">
+      <label for="admin-comment">Comment Note</label>
+      <input class="input-ctrl" type="text" id="admin-comment" placeholder="Optional comments..." required>
+    </div>
+    <div style="display: flex; justify-content: flex-end; gap: 12px; margin-top: 20px;">
+      <button class="btn btn-secondary" onclick="closeModal()">Discard</button>
+      <button class="btn ${action === 'Approved' ? 'btn-success' : 'btn-danger'}" onclick="submitLeaveDecision('${leaveId}', '${action}')">
+        Confirm ${action}
+      </button>
+    </div>
+  `;
+  showModal(`${action} Leave Request`, body);
+}
+window.showApproveCommentModal = showApproveCommentModal;
+
+export function submitLeaveDecision(leaveId, action) {
+  const comment = document.getElementById("admin-comment").value.trim();
+  window.store.updateLeaveStatus(leaveId, action, comment);
+  closeModal();
+  renderTimeOffView();
+}
+window.submitLeaveDecision = submitLeaveDecision;
+
+export function renderPayrollView() {
+  const user = window.store.getCurrentUser();
+  const sidebarHTML = getSidebarHTML("payroll");
+  const headerHTML = getHeaderHTML("Payroll & compensation");
+
+  const isAdmin = user.role === "HR";
+  let payrollContent = "";
+
+  if (isAdmin) {
+    payrollContent = `
+      <div class="animate-fade">
+        <h3 style="margin-bottom: 20px; font-weight: 600;">Workforce Payroll Calculator</h3>
+        <div class="alert-banner alert-success" style="margin-bottom: 24px;">
+          <span><strong>Note:</strong> Working days calculation automatically excludes national holidays and weekends. Unpaid leaves or absences reduce payable days pro-rated by working days.</span>
+        </div>
+
+        <div class="data-table-container glass">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>ID</th>
+                <th>Employee Name</th>
+                <th>Base Monthly</th>
+                <th>Payable / Working Days</th>
+                <th>Net Salary Payout</th>
+                <th>Bank Details</th>
+                <th>Action</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${window.store.state.employees.map(emp => {
+                const calc = calculateMonthlyPayroll(emp);
+                return `
+                  <tr>
+                    <td style="font-family: var(--font-mono); font-size: 0.85rem;">${emp.id}</td>
+                    <td><strong>${emp.name}</strong></td>
+                    <td>₹${emp.wage}</td>
+                    <td><strong>${calc.payableDays} / ${calc.monthDays}</strong> Days</td>
+                    <td style="color: var(--status-present); font-weight: 700;">₹${calc.payout}</td>
+                    <td style="font-size: 0.85rem; color: var(--text-muted);">
+                      ${emp.bankName !== 'TBD' ? `${emp.bankName} - ${emp.accountNo}` : '<span style="color: var(--status-absent);">Missing Banking Fields</span>'}
+                    </td>
+                    <td>
+                      <button class="btn btn-primary btn-sm" onclick="showPayslipModal('${emp.id}')">View Payslip</button>
+                    </td>
+                  </tr>
+                `;
+              }).join("")}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    `;
+  } else {
+    const calc = calculateMonthlyPayroll(user);
+
+    payrollContent = `
+      <div class="animate-fade" style="max-width: 800px; margin: 0 auto;">
+        <div class="glass" style="padding: 40px; border-left: 6px solid var(--accent);">
+          <div style="display: flex; justify-content: space-between; border-bottom: 2px solid var(--border-light); padding-bottom: 20px; margin-bottom: 24px;">
+            <div>
+              <h2 style="font-weight: 700; color: var(--accent);">SALARY SLIP</h2>
+              <span style="font-size: 0.9rem; color: var(--text-muted);">For the month of ${new Date().toLocaleDateString(undefined, { month: 'long', year: 'numeric' })}</span>
+            </div>
+            <div style="text-align: right;">
+              <h3 style="font-weight: 700;">WorkForces</h3>
+              <span style="font-size: 0.8rem; color: var(--text-dim);">${user.location}</span>
+            </div>
+          </div>
+
+          <div style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 20px; margin-bottom: 32px; font-size: 0.9rem;">
+            <div>
+              <div style="margin-bottom: 6px;"><span style="color: var(--text-muted);">Employee Name:</span> <strong>${user.name}</strong></div>
+              <div style="margin-bottom: 6px;"><span style="color: var(--text-muted);">Designation:</span> ${user.role}</div>
+              <div><span style="color: var(--text-muted);">Department:</span> ${user.department}</div>
+            </div>
+            <div style="text-align: right;">
+              <div style="margin-bottom: 6px;"><span style="color: var(--text-muted);">Employee ID:</span> <strong style="font-family: var(--font-mono);">${user.id}</strong></div>
+              <div style="margin-bottom: 6px;"><span style="color: var(--text-muted);">Payable / Working Days:</span> <strong>${calc.payableDays} / ${calc.monthDays}</strong></div>
+              <div><span style="color: var(--text-muted);">Bank:</span> ${user.bankName} (${user.accountNo})</div>
+            </div>
+          </div>
+
+          <div class="salary-breakdown-box">
+            <div class="salary-group">
+              <div class="salary-group-title">Earnings (Pro-rated)</div>
+              <div class="salary-row">
+                <span class="salary-label">Basic Salary</span>
+                <span class="salary-val">₹${calc.breakdown.basic}</span>
+              </div>
+              <div class="salary-row">
+                <span class="salary-label">HRA Allowance</span>
+                <span class="salary-val">₹${calc.breakdown.hra}</span>
+              </div>
+              <div class="salary-row">
+                <span class="salary-label">Standard Allowance</span>
+                <span class="salary-val">₹${calc.breakdown.standard}</span>
+              </div>
+              <div class="salary-row">
+                <span class="salary-label">Performance Bonus</span>
+                <span class="salary-val">₹${calc.breakdown.bonus}</span>
+              </div>
+              <div class="salary-row">
+                <span class="salary-label">LTA Allowance</span>
+                <span class="salary-val">₹${calc.breakdown.lta}</span>
+              </div>
+              <div class="salary-row">
+                <span class="salary-label">Fixed Allowance</span>
+                <span class="salary-val">₹${calc.breakdown.fixed}</span>
+              </div>
+            </div>
+
+            <div class="salary-group">
+              <div class="salary-group-title">Deductions</div>
+              <div class="salary-row">
+                <span class="salary-label">Employee Provident Fund (12%)</span>
+                <span class="salary-val deduct">₹${calc.breakdown.employeePf}</span>
+              </div>
+              <div class="salary-row">
+                <span class="salary-label">Professional Tax (PT)</span>
+                <span class="salary-val deduct">₹${calc.breakdown.pt}</span>
+              </div>
+              <div class="salary-row">
+                <span class="salary-label">Unpaid Absences Payout Cut</span>
+                <span class="salary-val deduct" style="font-weight: 700;">₹${calc.unpaidDeduction}</span>
+              </div>
+
+              <div style="border-top: 1px solid var(--border-light); margin-top: 24px; padding-top: 16px; text-align: right;">
+                <div style="font-size: 0.8rem; color: var(--text-muted); margin-bottom: 4px;">NET MONTHLY DISBURSEMENT</div>
+                <div style="font-size: 2rem; font-weight: 700; color: var(--status-present);">₹${calc.payout}</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
+  window.renderApp(`
+    ${sidebarHTML}
+    <div class="main-wrapper" data-layout="main">
+      ${headerHTML}
+      <div class="view-container">
+        ${payrollContent}
+      </div>
+    </div>
+  `);
+}
+window.renderPayrollView = renderPayrollView;
+
+export function calculateMonthlyPayroll(emp, targetYear = new Date().getFullYear(), targetMonth = new Date().getMonth()) {
+  const today = getTodayString();
+  const monthDays = new Date(targetYear, targetMonth + 1, 0).getDate();
+  const monthStr = String(targetMonth + 1).padStart(2, "0");
+  const yearMonthPrefix = `${targetYear}-${monthStr}-`;
+  
+  let absentDays = 0;
+  let unpaidLeaveDays = 0;
+  let totalWorkingDays = 0;
+
+  // Calculate working days (excluding weekends and holidays)
+  for (let d = 1; d <= monthDays; d++) {
+    const dStr = `${yearMonthPrefix}${String(d).padStart(2, "0")}`;
+    const dateObj = new Date(dStr);
+    const dayOfWeek = dateObj.getDay();
+    if (dayOfWeek !== 0 && dayOfWeek !== 6 && !isHoliday(dStr)) {
+      totalWorkingDays++;
+    }
+  }
+  
+  // Calculate absences and unpaid leaves on working days
+  for (let d = 1; d <= monthDays; d++) {
+    const dStr = `${yearMonthPrefix}${String(d).padStart(2, "0")}`;
+    if (dStr > today) continue;
+
+    const dateObj = new Date(dStr);
+    const dayOfWeek = dateObj.getDay();
+    if (dayOfWeek === 0 || dayOfWeek === 6 || isHoliday(dStr)) continue;
+
+    const leave = window.store.state.timeOff.find(l => 
+      l.employeeId === emp.id && 
+      l.status === "Approved" && 
+      dStr >= l.startDate && 
+      dStr <= l.endDate
+    );
+
+    if (leave) {
+      const leaveWeight = (leave.duration && leave.duration !== "Full") ? 0.5 : 1.0;
+      if (leave.leaveType === "Unpaid Leave") {
+        unpaidLeaveDays += leaveWeight;
+      }
+      if (leaveWeight < 1.0) {
+        const att = window.store.state.attendance.find(a => a.employeeId === emp.id && a.date === dStr);
+        if (!att) {
+          absentDays += 0.5;
+        }
+      }
+    } else {
+      const att = window.store.state.attendance.find(a => a.employeeId === emp.id && a.date === dStr);
+      if (!att) {
+        absentDays++;
+      }
+    }
+  }
+
+  const totalAbsences = absentDays + unpaidLeaveDays;
+  const payableDays = Math.max(0, totalWorkingDays - totalAbsences);
+
+  const bd = getSalaryBreakdown(emp.wage, emp);
+  const perDayWage = totalWorkingDays > 0 ? (emp.wage / totalWorkingDays) : 0;
+  
+  const unpaidDeduction = perDayWage * totalAbsences;
+  const payout = Math.max(0, bd.netSalary - unpaidDeduction);
+
+  return {
+    payableDays,
+    payout: Math.round(payout),
+    unpaidDeduction: Math.round(unpaidDeduction),
+    monthDays: totalWorkingDays,
+    breakdown: {
+      basic: Math.round(bd.basic),
+      hra: Math.round(bd.hra),
+      standard: Math.round(bd.standard),
+      bonus: Math.round(bd.bonus),
+      lta: Math.round(bd.lta),
+      fixed: Math.round(bd.fixed),
+      employerPf: Math.round(bd.employerPf),
+      employeePf: Math.round(bd.employeePf),
+      pt: Math.round(bd.pt),
+      totalDeductions: Math.round(bd.totalDeductions),
+      netSalary: Math.round(bd.netSalary)
+    }
+  };
+}
+window.calculateMonthlyPayroll = calculateMonthlyPayroll;
+
+export function showPayslipModal(empId) {
+  const emp = window.store.getEmployee(empId);
+  const calc = calculateMonthlyPayroll(emp);
+
+  const bodyHTML = `
+    <div style="border-bottom: 1px solid var(--border-light); padding-bottom: 16px; margin-bottom: 20px;">
+      <h4 style="font-weight: 700; color: var(--accent);">${emp.name}</h4>
+      <span style="font-size: 0.8rem; color: var(--text-muted);">${emp.role} (${emp.id})</span>
+    </div>
+
+    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px; font-size: 0.85rem; margin-bottom: 20px;">
+      <div><strong>Monthly Base:</strong> ₹${emp.wage}</div>
+      <div style="text-align: right;"><strong>Payable / Working Days:</strong> ${calc.payableDays} / ${calc.monthDays}</div>
+    </div>
+
+    <div class="salary-group" style="margin-bottom: 20px;">
+      <div class="salary-group-title">Earnings Breakdown</div>
+      <div class="salary-row"><span>Basic Salary</span><span>₹${calc.breakdown.basic}</span></div>
+      <div class="salary-row"><span>HRA</span><span>₹${calc.breakdown.hra}</span></div>
+      <div class="salary-row"><span>Bonus / Standard / Fixed</span><span>₹${calc.breakdown.bonus + calc.breakdown.standard + calc.breakdown.fixed}</span></div>
+    </div>
+
+    <div class="salary-group" style="margin-bottom: 20px;">
+      <div class="salary-group-title">Deductions</div>
+      <div class="salary-row"><span>Provident Fund</span><span class="salary-val deduct">₹${calc.breakdown.employeePf}</span></div>
+      <div class="salary-row"><span>PT</span><span class="salary-val deduct">₹${calc.breakdown.pt}</span></div>
+      <div class="salary-row"><span>Absence Deductions</span><span class="salary-val deduct">₹${calc.unpaidDeduction}</span></div>
+    </div>
+
+    <div style="display: flex; justify-content: space-between; align-items: center; border-top: 1px solid var(--border-light); padding-top: 16px;">
+      <div><strong style="color: var(--text-muted);">Net Payout:</strong></div>
+      <div style="font-size: 1.5rem; font-weight: 700; color: var(--status-present);">₹${calc.payout}</div>
+    </div>
+  `;
+
+  showModal("Compensation Pay Slip", bodyHTML);
+}
+window.showPayslipModal = showPayslipModal;
