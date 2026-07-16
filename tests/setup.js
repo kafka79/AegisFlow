@@ -170,55 +170,58 @@ global.IDBKeyRange = {
   only: vi.fn((value) => ({ lowerBound: value, upperBound: value, lowerOpen: false, upperOpen: false }))
 };
 
-// Mock crypto.subtle
-Object.defineProperty(global, 'crypto', {
-  value: {
-    subtle: {
-      digest: vi.fn().mockResolvedValue(new ArrayBuffer(32)),
-      importKey: vi.fn().mockResolvedValue({}),
-      deriveBits: vi.fn().mockResolvedValue(new ArrayBuffer(32)),
-      sign: vi.fn().mockResolvedValue(new ArrayBuffer(32)),
-      verify: vi.fn().mockResolvedValue(true),
-      generateKey: vi.fn().mockResolvedValue({}),
-      exportKey: vi.fn().mockResolvedValue(new ArrayBuffer(32)),
-      encrypt: vi.fn().mockImplementation(async (algorithm, _key, data) => {
-        const payload = {
-          plaintext: Buffer.from(new Uint8Array(data)).toString('base64'),
-          aad: Buffer.from(new Uint8Array(algorithm.additionalData || new Uint8Array())).toString('base64'),
-          iv: Buffer.from(new Uint8Array(algorithm.iv || new Uint8Array())).toString('base64')
-        };
-        return new TextEncoder().encode(JSON.stringify(payload)).buffer;
-      }),
-      decrypt: vi.fn().mockImplementation(async (algorithm, _key, ciphertext) => {
-        let payload;
-        try {
-          payload = JSON.parse(new TextDecoder().decode(ciphertext));
-        } catch {
-          throw new Error('Ciphertext authentication failed');
-        }
-        const aad = Buffer.from(new Uint8Array(algorithm.additionalData || new Uint8Array())).toString('base64');
-        const iv = Buffer.from(new Uint8Array(algorithm.iv || new Uint8Array())).toString('base64');
-        if (payload.aad !== aad) {
-          throw new Error('Associated data mismatch');
-        }
-        if (payload.iv !== iv) {
-          throw new Error('Ciphertext authentication failed');
-        }
-        return Uint8Array.from(Buffer.from(payload.plaintext, 'base64')).buffer;
-      })
-    },
-    getRandomValues: vi.fn((arr) => {
-      for (let i = 0; i < arr.length; i++) arr[i] = Math.floor(Math.random() * 256);
-      return arr;
-    }),
-    randomUUID: vi.fn(() => 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => {
-      const r = Math.random() * 16 | 0;
-      return (c === 'x' ? r : (r & 0x3 | 0x8)).toString(16);
-    }))
-  },
-  writable: true,
-  configurable: true
-});
+// Mock crypto.subtle (only in jsdom where it's not fully implemented)
+  const isJSDOM = typeof navigator !== 'undefined' && navigator.userAgent?.includes('jsdom');
+  if (isJSDOM) {
+    Object.defineProperty(global, 'crypto', {
+      value: {
+        subtle: {
+          digest: vi.fn().mockResolvedValue(new ArrayBuffer(32)),
+          importKey: vi.fn().mockResolvedValue({}),
+          deriveBits: vi.fn().mockResolvedValue(new ArrayBuffer(32)),
+          sign: vi.fn().mockResolvedValue(new ArrayBuffer(32)),
+          verify: vi.fn().mockResolvedValue(true),
+          generateKey: vi.fn().mockResolvedValue({}),
+          exportKey: vi.fn().mockResolvedValue(new ArrayBuffer(32)),
+          encrypt: vi.fn().mockImplementation(async (algorithm, _key, data) => {
+            const payload = {
+              plaintext: Buffer.from(new Uint8Array(data)).toString('base64'),
+              aad: Buffer.from(new Uint8Array(algorithm.additionalData || new Uint8Array())).toString('base64'),
+              iv: Buffer.from(new Uint8Array(algorithm.iv || new Uint8Array())).toString('base64')
+            };
+            return new TextEncoder().encode(JSON.stringify(payload)).buffer;
+          }),
+          decrypt: vi.fn().mockImplementation(async (algorithm, _key, ciphertext) => {
+            let payload;
+            try {
+              payload = JSON.parse(new TextDecoder().decode(ciphertext));
+            } catch {
+              throw new Error('Ciphertext authentication failed');
+            }
+            const aad = Buffer.from(new Uint8Array(algorithm.additionalData || new Uint8Array())).toString('base64');
+            const iv = Buffer.from(new Uint8Array(algorithm.iv || new Uint8Array())).toString('base64');
+            if (payload.aad !== aad) {
+              throw new Error('Associated data mismatch');
+            }
+            if (payload.iv !== iv) {
+              throw new Error('Ciphertext authentication failed');
+            }
+            return Uint8Array.from(Buffer.from(payload.plaintext, 'base64')).buffer;
+          })
+        },
+        getRandomValues: vi.fn((arr) => {
+          for (let i = 0; i < arr.length; i++) arr[i] = Math.floor(Math.random() * 256);
+          return arr;
+        }),
+        randomUUID: vi.fn(() => 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => {
+          const r = Math.random() * 16 | 0;
+          return (c === 'x' ? r : (r & 0x3 | 0x8)).toString(16);
+        }))
+      },
+      writable: true,
+      configurable: true
+    });
+  }
 
 // Mock localStorage
 const storage = new Map();
@@ -273,12 +276,14 @@ global.Worker = vi.fn().mockImplementation(function() {
 global.URL.createObjectURL = vi.fn(() => 'blob:mock');
 global.URL.revokeObjectURL = vi.fn();
 
-// Mock navigator
-global.navigator = {
-  onLine: true,
-  connection: { downlink: 10 },
-  serviceWorker: { ready: Promise.resolve({ sync: { register: vi.fn() } }) }
-};
+// Mock navigator (only in jsdom)
+  if (typeof navigator !== 'undefined' && navigator.userAgent?.includes('jsdom')) {
+    global.navigator = {
+      onLine: true,
+      connection: { downlink: 10 },
+      serviceWorker: { ready: Promise.resolve({ sync: { register: vi.fn() } }) }
+    };
+  }
 
 // Mock window
 if (global.window) {

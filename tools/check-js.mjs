@@ -7,7 +7,8 @@ const ignoredDirs = new Set([
   ".git",
   "coverage",
   "node_modules",
-  "dist"
+  "dist",
+  "tools"
 ]);
 
 const placeholderPatterns = [

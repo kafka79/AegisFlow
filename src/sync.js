@@ -1,5 +1,10 @@
+import { getStore, getRouter } from './app-context.js';
+import { SyncTelemetry } from "./app-context.js";
 import { MockServer } from "./server.js";
 import { addFieldClocks } from "./merge.js";
+import { fetchAndCachePayrollConfig } from "./helpers.js";
+
+const MERGE_META_KEYS = new Set(["vectorClock", "lastModified", "id", "fieldClocks", "employeeId"]);
 
 /**
  * Offline Sync Engine Module
@@ -10,22 +15,14 @@ import { addFieldClocks } from "./merge.js";
 const SYNC_DB_NAME = "workforces_sync_db";
 const SYNC_DB_VERSION = 4;
 const SYNC_PROTOCOL_VERSION = 2;
+const MIN_SUPPORTED_PROTOCOL_VERSION = 1;
 const MAX_RETRIES = 5;
 const RETRY_BASE_DELAY_MS = 5000;
 const SYNC_BATCH_SIZE = 50;
 const VECTOR_CLOCK_TTL_DAYS = 30;
+const VECTOR_CLOCK_GC_BATCH_SIZE = 50;
 const CONNECTIVITY_CHECK_INTERVAL_MS = 30000;
 const CONNECTIVITY_CHECK_URL = "/favicon.ico";
-const MAX_BUFFERED_AMOUNT = 1024 * 1024;
-const MESSAGE_TIMEOUT_MS = 30000;
-const TELEMETRY_ENDPOINT = (() => {
-  try {
-    const url = new URL(window.location.href);
-    return url.searchParams.get("telemetry_endpoint") || "/api/telemetry";
-  } catch {
-    return "/api/telemetry";
-  }
-})();
 
 let syncDb = null;
 const syncStatusListeners = [];
@@ -34,40 +31,120 @@ let syncChannel = null;
 let connectivityCheckTimer = null;
 let isOnlineCache = true;
 let lastConnectivityCheck = 0;
-const pendingAcks = new Map();
-let messageSequence = 0;
+
+let cachedClientId = null;
+let cachedVectorClock = null;
+
+async function saveSyncIdentity(key, value) {
+  if (!syncDb) return;
+  return new Promise((resolve) => {
+    const tx = syncDb.transaction("sync_meta", "readwrite");
+    const store = tx.objectStore("sync_meta");
+    store.put({ key, value });
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => resolve();
+  });
+}
+
+async function loadSyncIdentity() {
+  if (!syncDb) return;
+
+  const clientIdObj = await new Promise((resolve) => {
+    const tx = syncDb.transaction("sync_meta", "readonly");
+    const store = tx.objectStore("sync_meta");
+    const req = store.get("sync_client_id");
+    req.onsuccess = () => resolve(req.result || null);
+    req.onerror = () => resolve(null);
+  });
+
+  if (clientIdObj && clientIdObj.value) {
+    cachedClientId = clientIdObj.value;
+    localStorage.setItem("sync_client_id", cachedClientId);
+  } else {
+    cachedClientId = localStorage.getItem("sync_client_id");
+    if (!cachedClientId) {
+      cachedClientId = "client_" + crypto.randomUUID();
+      localStorage.setItem("sync_client_id", cachedClientId);
+    }
+    await saveSyncIdentity("sync_client_id", cachedClientId);
+  }
+
+  const clockObj = await new Promise((resolve) => {
+    const tx = syncDb.transaction("sync_meta", "readonly");
+    const store = tx.objectStore("sync_meta");
+    const req = store.get("vector_clock_" + cachedClientId);
+    req.onsuccess = () => resolve(req.result || null);
+    req.onerror = () => resolve(null);
+  });
+
+  if (clockObj && clockObj.value) {
+    cachedVectorClock = clockObj.value;
+    localStorage.setItem("vector_clock_" + cachedClientId, JSON.stringify(cachedVectorClock));
+  } else {
+    const rawValue = localStorage.getItem("vector_clock_" + cachedClientId);
+    try {
+      cachedVectorClock = rawValue ? JSON.parse(rawValue) : null;
+    } catch {
+      cachedVectorClock = null;
+    }
+    if (!cachedVectorClock || cachedVectorClock.clock === undefined) {
+      cachedVectorClock = {
+        clock: {},
+        lastUpdated: Date.now()
+      };
+    }
+    await saveSyncIdentity("vector_clock_" + cachedClientId, cachedVectorClock);
+  }
+}
 
 function getClientId() {
+  if (cachedClientId) return cachedClientId;
   let clientId = localStorage.getItem("sync_client_id");
   if (!clientId) {
     clientId = "client_" + crypto.randomUUID();
     localStorage.setItem("sync_client_id", clientId);
   }
+  cachedClientId = clientId;
+  
+  // Register this client in the global registry for O(1) GC discovery
+  try {
+    let registry = JSON.parse(localStorage.getItem("sync_client_registry") || "[]");
+    if (!registry.includes(clientId)) {
+      registry.push(clientId);
+      if (registry.length > 500) registry = registry.slice(-500); // Prevent unbounded growth
+      localStorage.setItem("sync_client_registry", JSON.stringify(registry));
+    }
+  } catch (e) {
+    localStorage.setItem("sync_client_registry", JSON.stringify([clientId]));
+  }
+  
+  saveSyncIdentity("sync_client_id", clientId);
   return clientId;
 }
 
 function generateVectorClock() {
   const clientId = getClientId();
-  const rawValue = localStorage.getItem("vector_clock_" + clientId);
-  let clockData;
-  try {
-    clockData = rawValue ? JSON.parse(rawValue) : null;
-  } catch {
-    clockData = null;
+  if (!cachedVectorClock) {
+    const rawValue = localStorage.getItem("vector_clock_" + clientId);
+    try {
+      cachedVectorClock = rawValue ? JSON.parse(rawValue) : null;
+    } catch {
+      cachedVectorClock = null;
+    }
+    if (!cachedVectorClock || cachedVectorClock.clock === undefined) {
+      cachedVectorClock = {
+        clock: {},
+        lastUpdated: Date.now()
+      };
+    }
   }
-  
-  if (!clockData || clockData.clock === undefined) {
-    clockData = {
-      clock: clockData || {},
-      lastUpdated: Date.now()
-    };
-  }
-  
-  clockData.clock[clientId] = (clockData.clock[clientId] || 0) + 1;
-  clockData.lastUpdated = Date.now();
-  
-  localStorage.setItem("vector_clock_" + clientId, JSON.stringify(clockData));
-  return clockData.clock;
+
+  cachedVectorClock.clock[clientId] = (cachedVectorClock.clock[clientId] || 0) + 1;
+  cachedVectorClock.lastUpdated = Date.now();
+
+  localStorage.setItem("vector_clock_" + clientId, JSON.stringify(cachedVectorClock));
+  saveSyncIdentity("vector_clock_" + clientId, cachedVectorClock);
+  return cachedVectorClock.clock;
 }
 
 async function acquireSyncLock() {
@@ -282,6 +359,12 @@ function stopConnectivityMonitor() {
   if (connectivityCheckTimer) clearInterval(connectivityCheckTimer);
 }
 
+if (typeof window !== "undefined") {
+  window.addEventListener("beforeunload", () => {
+    stopConnectivityMonitor();
+  });
+}
+
 function notifyStatus(status, queueLength = 0) {
   syncStatusListeners.forEach(listener => {
     try {
@@ -322,61 +405,25 @@ function initSyncDB() {
   });
 }
 
-async function sendWithAck(ws, message, timeout = MESSAGE_TIMEOUT_MS) {
-  const sequence = ++messageSequence;
-  const payload = { ...message, sequence, protocolVersion: SYNC_PROTOCOL_VERSION, timestamp: Date.now() };
-
-  if (ws.bufferedAmount > MAX_BUFFERED_AMOUNT) {
-    await new Promise(r => setTimeout(r, 100));
-  }
-
-  return new Promise((resolve, reject) => {
-    const timeoutId = setTimeout(() => {
-      pendingAcks.delete(sequence);
-      reject(new Error(`Message ${sequence} timed out after ${timeout}ms`));
-    }, timeout);
-
-    pendingAcks.set(sequence, { resolve, reject, timeoutId });
-    ws.send(JSON.stringify(payload));
-  });
-}
-
-async function ensureWsConnection() {
-  return false;
-}
-
-async function sendBatchWithAck(batch, token, csrfToken) {
-  return MockServer.syncTransactions(token, batch, csrfToken);
-}
-
-function handleAck(sequence, success, error) {
-  const pending = pendingAcks.get(sequence);
-  if (pending) {
-    clearTimeout(pending.timeoutId);
-    pendingAcks.delete(sequence);
-    if (success) {
-      pending.resolve();
-    } else {
-      pending.reject(new Error(error || "Message rejected by server"));
+async function reconcileClientCache(token) {
+  if (!token || !getStore()?.state) return;
+  try {
+    const serverEmployees = await MockServer.getEmployees(token);
+    if (Array.isArray(serverEmployees)) {
+      getStore().state.employees = serverEmployees;
+      getStore().saveState?.();
+      await persistServerState("employees", serverEmployees);
+      await initializeClocksFromServer(serverEmployees);
     }
+  } catch (err) {
+    console.warn("[SYNC] Client cache reconciliation failed:", err);
   }
 }
 
-async function negotiateProtocolVersion(ws) {
-  return new Promise((resolve) => {
-    const handler = (e) => {
-      try {
-        const msg = JSON.parse(e.data);
-        if (msg.type === "protocol_version") {
-          ws.removeEventListener("message", handler);
-          resolve(Math.min(msg.version, SYNC_PROTOCOL_VERSION));
-        }
-      } catch {}
-    };
-    ws.addEventListener("message", handler);
-    ws.send(JSON.stringify({ type: "protocol_version", version: SYNC_PROTOCOL_VERSION }));
-    setTimeout(() => { ws.removeEventListener("message", handler); resolve(1); }, 5000);
-  });
+async function initializeClocksFromServer(serverEmployees) {
+  // We no longer artificially inflate the client's vector clock to exceed the
+  // server's max field clock. This avoids artificial clock inflation attacks
+  // and keeps vector clocks representing actual causal client updates.
 }
 
 function persistServerState(store, data) {
@@ -404,28 +451,62 @@ async function loadServerState(store) {
 function cleanupVectorClocks() {
   const clientId = getClientId();
   const cutoff = Date.now() - (VECTOR_CLOCK_TTL_DAYS * 24 * 60 * 60 * 1000);
-  for (let i = 0; i < localStorage.length; i++) {
-    const key = localStorage.key(i);
-    if (key?.startsWith("vector_clock_") && key !== `vector_clock_${clientId}`) {
+  
+  let keysToCheck = [];
+  try {
+    const registry = JSON.parse(localStorage.getItem("sync_client_registry") || "[]");
+    keysToCheck = registry
+      .map(id => `vector_clock_${id}`)
+      .filter(key => key !== `vector_clock_${clientId}`);
+  } catch {
+    keysToCheck = [];
+  }
+  
+  // Process in batches to avoid blocking main thread
+  let processed = 0;
+  let removedIds = [];
+  
+  function processBatch() {
+    const batch = keysToCheck.slice(processed, processed + VECTOR_CLOCK_GC_BATCH_SIZE);
+    processed += batch.length;
+    
+    for (const key of batch) {
       try {
         const stored = JSON.parse(localStorage.getItem(key) || "{}");
         const lastUpdated = stored.lastUpdated || 0;
         if (lastUpdated < cutoff) {
           localStorage.removeItem(key);
+          removedIds.push(key.replace("vector_clock_", ""));
         }
       } catch {
         localStorage.removeItem(key);
+        removedIds.push(key.replace("vector_clock_", ""));
       }
     }
+    
+    if (processed < keysToCheck.length) {
+      // Yield to main thread between batches
+      setTimeout(processBatch, 0);
+    } else if (removedIds.length > 0) {
+      try {
+        const currentRegistry = JSON.parse(localStorage.getItem("sync_client_registry") || "[]");
+        const newRegistry = currentRegistry.filter(id => !removedIds.includes(id));
+        localStorage.setItem("sync_client_registry", JSON.stringify(newRegistry));
+      } catch (e) {}
+    }
+  }
+  
+  if (keysToCheck.length > 0) {
+    processBatch();
   }
 }
 
 async function getActiveSession() {
   try {
-    await window.store?.ready;
+    await getStore()?.ready;
   } catch {}
 
-  const liveSession = window.store?.state?.currentSession;
+  const liveSession = getStore()?.state?.currentSession;
   if (liveSession?.token) {
     return {
       token: liveSession.token,
@@ -448,58 +529,22 @@ async function getActiveSession() {
   }
 }
 
-window.SyncTelemetry = {
-  successCount: 0,
-  failureCount: 0,
-  conflictCount: 0,
-  recentLogs: [],
-  log(message) {
-    this.recentLogs.unshift({ timestamp: Date.now(), message });
-    if (this.recentLogs.length > 30) this.recentLogs.pop();
-    
-    // Log structured JSON to the console
-    console.log(JSON.stringify({
-      level: "info",
-      timestamp: new Date().toISOString(),
-      message: message,
-      successCount: this.successCount,
-      failureCount: this.failureCount,
-      conflictCount: this.conflictCount
-    }));
-    
-    if (window.location.protocol !== "file:") {
-      try {
-        const sanitizedMsg = String(message || "")
-          .replace(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g, "[EMAIL]")
-          .replace(/ODI[A-Z0-9]+/gi, "[ID]");
-        const payload = JSON.stringify({
-          timestamp: Date.now(),
-          message: sanitizedMsg,
-          successCount: this.successCount,
-          failureCount: this.failureCount,
-          conflictCount: this.conflictCount
-        });
-        const blob = new Blob([payload], { type: "application/json" });
-        navigator.sendBeacon(TELEMETRY_ENDPOINT, blob);
-      } catch (e) { /* ignore */ }
-    }
-    if (typeof window.renderDevConsole === "function") {
-      try { window.renderDevConsole(); } catch (e) { console.error("Telemetry render error:", e); }
-    }
-  }
-};
-
 export const SyncEngine = {
   async init() {
     await initSyncDB();
+    await loadSyncIdentity();
+    await fetchAndCachePayrollConfig().catch(() => {});
     await loadSyncCursor().then(c => { currentSyncCursor = c; });
     setupBroadcastChannel();
     startConnectivityMonitor();
     cleanupVectorClocks();
     const cleanupTimer = setInterval(cleanupVectorClocks, 24 * 60 * 60 * 1000);
     cleanupTimer.unref?.();
-    
-    this.sync();
+
+    // Protocol version handshake
+    await this.negotiateProtocolVersion();
+
+    await this.sync();
     
     window.addEventListener("online", () => {
       console.log("[SYNC] Network online. Flushing queue...");
@@ -583,7 +628,36 @@ export const SyncEngine = {
     runBackgroundSync();
     processRetryQueue();
   },
-  
+
+  async negotiateProtocolVersion() {
+    try {
+      const { token } = await getActiveSession();
+      if (!token) return false;
+      const response = await MockServer.getSyncProtocolVersion(token);
+      if (response && response.serverVersion) {
+        const serverVersion = response.serverVersion;
+        const minSupported = response.minSupportedVersion || 1;
+        
+        if (serverVersion < MIN_SUPPORTED_PROTOCOL_VERSION) {
+          console.warn(`[SYNC] Server protocol version ${serverVersion} is below minimum supported ${MIN_SUPPORTED_PROTOCOL_VERSION}`);
+          SyncTelemetry.log(`Protocol mismatch: server v${serverVersion} < min v${MIN_SUPPORTED_PROTOCOL_VERSION}`);
+          return false;
+        }
+        
+        if (serverVersion > SYNC_PROTOCOL_VERSION) {
+          console.warn(`[SYNC] Server protocol version ${serverVersion} is newer than client v${SYNC_PROTOCOL_VERSION}. Some features may not work.`);
+        }
+        
+        SyncTelemetry.log(`Protocol handshake: client v${SYNC_PROTOCOL_VERSION}, server v${serverVersion}`);
+        return true;
+      }
+    } catch (err) {
+      console.warn("[SYNC] Protocol version handshake failed:", err);
+      SyncTelemetry.log(`Protocol handshake failed: ${err.message}`);
+    }
+    return false;
+  },
+
   onStatusChange(listener) {
     syncStatusListeners.push(listener);
     checkConnectivity().then(online => {
@@ -593,12 +667,35 @@ export const SyncEngine = {
   
   async enqueue(type, storeName, data, priority = 0) {
     if (!syncDb) return;
-    
+
+    const keyField = storeName === "users" ? "employeeId" : "id";
+    const key = data[keyField];
+
+    let serverRecord = null;
+    if (key) {
+      const serverRecords = await loadServerState(storeName) || [];
+      serverRecord = serverRecords.find?.(r => r[keyField] === key) || null;
+    }
+
     const vectorClock = generateVectorClock();
+    const clientId = getClientId();
+
+    const dataCopy = { ...data };
+    dataCopy.fieldClocks = { ...(dataCopy.fieldClocks || {}) };
+
+    for (const key of Object.keys(dataCopy)) {
+      if (key !== "fieldClocks" && !MERGE_META_KEYS.has(key)) {
+        const isModified = !serverRecord || serverRecord[key] !== dataCopy[key];
+        if (isModified) {
+          dataCopy.fieldClocks[key] = vectorClock[clientId];
+        }
+      }
+    }
+
     const mutation = {
       type,
       store: storeName,
-      data: addFieldClocks({ ...data }, vectorClock, getClientId()),
+      data: addFieldClocks(dataCopy, vectorClock, clientId),
       timestamp: Date.now(),
       priority,
       vectorClock,
@@ -678,7 +775,7 @@ export const SyncEngine = {
     if (!syncDb) return;
     const retryCount = (mutation.retryCount || 0) + 1;
     if (retryCount > MAX_RETRIES) {
-      window.SyncTelemetry.log(`Mutation ${mutation.id} exceeded max retries, moving to dead letter`);
+      SyncTelemetry.log(`Mutation ${mutation.id} exceeded max retries, moving to dead letter`);
       return;
     }
     
@@ -712,7 +809,7 @@ export const SyncEngine = {
     const { token, csrfToken } = await getActiveSession();
     
     if (!token) {
-      window.SyncTelemetry.log("Sync abort: No active authenticated session token found.");
+      SyncTelemetry.log("Sync abort: No active authenticated session token found.");
       this.getQueueLength().then(len => notifyStatus("offline", len));
       return false;
     }
@@ -728,37 +825,17 @@ export const SyncEngine = {
       }
       
       notifyStatus("syncing", pending.length);
-      window.SyncTelemetry.log(`Sync initiated. Processing ${pending.length} transactions...`);
-      
-      const wsReady = await ensureWsConnection();
+      SyncTelemetry.log(`Sync initiated. Processing ${pending.length} transactions...`);
+
       let syncResult;
-      
-      if (wsReady) {
-        const batches = [];
-        for (let i = 0; i < pending.length; i += SYNC_BATCH_SIZE) {
-          batches.push(pending.slice(i, i + SYNC_BATCH_SIZE));
-        }
-        
-        const allResults = [];
-        let totalConflicts = 0;
-        
-        for (const batch of batches) {
-          const result = await sendBatchWithAck(batch, token, csrfToken);
-          allResults.push(...(result.results || []));
-          totalConflicts += result.conflicts || 0;
-        }
-        
-        syncResult = { success: true, results: allResults, conflicts: totalConflicts };
-      } else {
-        try {
-          syncResult = await MockServer.syncTransactions(token, pending, csrfToken);
-        } catch (err) {
-          syncResult = {
-            success: false,
-            results: pending.map(m => ({ id: m.id, status: "error", error: err.message || String(err) })),
-            conflicts: 0
-          };
-        }
+      try {
+        syncResult = await MockServer.syncTransactions(token, pending, csrfToken);
+      } catch (err) {
+        syncResult = {
+          success: false,
+          results: pending.map(m => ({ id: m.id, status: "error", error: err.message || String(err) })),
+          conflicts: 0
+        };
       }
       
       const results = syncResult.results || [];
@@ -785,15 +862,19 @@ export const SyncEngine = {
         broadcastSyncComplete(currentSyncCursor);
       }
       
-      window.SyncTelemetry.successCount += successful.length;
-      window.SyncTelemetry.failureCount += failed.length;
-      window.SyncTelemetry.conflictCount += totalConflicts;
+      SyncTelemetry.successCount += successful.length;
+      SyncTelemetry.failureCount += failed.length;
+      SyncTelemetry.conflictCount += totalConflicts;
       
       for (const f of failed) {
         await this.addToRetryQueue(f.mutation, f.error);
       }
       
-      window.SyncTelemetry.log(`Sync complete. Success: ${successful.length}, Failed: ${failed.length}, Conflicts: ${totalConflicts}`);
+      SyncTelemetry.log(`Sync complete. Success: ${successful.length}, Failed: ${failed.length}, Conflicts: ${totalConflicts}`);
+
+      if (successful.length > 0) {
+        await reconcileClientCache(token);
+      }
       
       const remainingLen = await this.getQueueLength();
       notifyStatus(remainingLen > 0 ? "syncing" : "online", remainingLen);

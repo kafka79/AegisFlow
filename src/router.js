@@ -1,38 +1,65 @@
+import { getStore, registerRouter, installNavigationDelegation } from "./app-context.js";
+import {
+  renderLoginView,
+  renderSignupView,
+  renderDashboardView,
+  renderEmployeesView,
+  renderProfileView,
+  renderAttendanceView,
+  renderTimeOffView,
+  renderPayrollView
+} from "./views.js";
+
 export class Router {
   constructor() {
     this.routes = {
-      login: () => window.renderLoginView?.(),
-      signup: () => window.renderSignupView?.(),
-      dashboard: () => window.renderDashboardView?.(),
-      employees: () => window.renderEmployeesView?.(),
-      profile: (params) => window.renderProfileView?.(params),
-      attendance: () => window.renderAttendanceView?.(),
-      timeoff: () => window.renderTimeOffView?.(),
-      payroll: () => window.renderPayrollView?.()
+      login: () => renderLoginView(),
+      signup: () => renderSignupView(),
+      dashboard: () => renderDashboardView(),
+      employees: () => renderEmployeesView(),
+      profile: (params) => renderProfileView(params),
+      attendance: () => renderAttendanceView(),
+      timeoff: () => renderTimeOffView(),
+      payroll: () => renderPayrollView()
     };
 
     this.useHistoryApi = this.supportsHistoryApi();
     this.scrollRestoration = "manual";
-
-    if (this.useHistoryApi) {
-      window.addEventListener("popstate", (e) => {
-        if (e.state !== null) {
-          this.handleRoute();
-        }
-      });
-      window.history.scrollRestoration = "manual";
-    } else {
-      window.addEventListener("hashchange", () => this.handleRoute());
-    }
-
-    window.addEventListener("beforeunload", () => {
+    this._popStateHandler = (e) => {
+      if (e.state !== null) {
+        this.handleRoute();
+      }
+    };
+    this._hashChangeHandler = () => this.handleRoute();
+    this._beforeUnloadHandler = () => {
       if (this.useHistoryApi) {
         sessionStorage.setItem("router_scroll", JSON.stringify({
           x: window.scrollX,
           y: window.scrollY
         }));
       }
-    });
+    };
+
+    if (this.useHistoryApi) {
+      window.addEventListener("popstate", this._popStateHandler);
+      window.history.scrollRestoration = "manual";
+    } else {
+      window.addEventListener("hashchange", this._hashChangeHandler);
+    }
+
+    window.addEventListener("beforeunload", this._beforeUnloadHandler);
+  }
+
+  destroy() {
+    if (this.useHistoryApi) {
+      window.removeEventListener("popstate", this._popStateHandler);
+    } else {
+      window.removeEventListener("hashchange", this._hashChangeHandler);
+    }
+    window.removeEventListener("beforeunload", this._beforeUnloadHandler);
+    this._popStateHandler = null;
+    this._hashChangeHandler = null;
+    this._beforeUnloadHandler = null;
   }
 
   supportsHistoryApi() {
@@ -95,7 +122,7 @@ export class Router {
 
     params = queryStr ? Object.fromEntries(new URLSearchParams(queryStr)) : {};
 
-    const user = window.store?.getCurrentUser();
+    const user = getStore()?.getCurrentUser();
     const publicRoutes = ["login", "signup"];
 
     if (!user && !publicRoutes.includes(route)) {
@@ -153,7 +180,20 @@ export class Router {
       window.history.back();
     }
   }
+
+  destroy() {
+    if (this.useHistoryApi) {
+      window.removeEventListener("popstate", this._popStateHandler);
+    } else {
+      window.removeEventListener("hashchange", this._hashChangeHandler);
+    }
+    window.removeEventListener("beforeunload", this._beforeUnloadHandler);
+  }
 }
 
 window.Router = Router;
-window.router = new Router();
+if (typeof window !== "undefined" && !window.__TEST_MODE__ && !import.meta.env?.VITEST) {
+  const router = new Router();
+  registerRouter(router);
+  installNavigationDelegation();
+}

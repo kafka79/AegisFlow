@@ -1,10 +1,10 @@
 /**
  * Cryptography helpers for the browser-local demo.
- * PBKDF2 password stretching, AES-GCM encryption, HMAC-signed session tokens,
- * and periodic HMAC key rotation stored in IndexedDB. Not production HR security.
+ * PBKDF2 password stretching, HMAC-signed session tokens.
+ * Not production HR security.
  */
 
-const PBKDF2_ITERATIONS = 600000;
+const PBKDF2_ITERATIONS = 100000;
 const PBKDF2_ALGORITHM = "PBKDF2";
 const PBKDF2_HASH = "SHA-256";
 const PBKDF2_KEY_LENGTH = 256;
@@ -13,13 +13,6 @@ const HMAC_KEY_LENGTH = 32;
 const SESSION_TTL_MS = 2 * 60 * 60 * 1000;
 const MAX_LOGIN_ATTEMPTS = 5;
 const LOGIN_LOCKOUT_MS = 15 * 60 * 1000;
-
-const AES_ALGORITHM = "AES-GCM";
-const AES_KEY_LENGTH = 256;
-const AES_IV_LENGTH = 12;
-const AES_TAG_LENGTH = 128;
-const KEY_ROTATION_INTERVAL_MS = 24 * 60 * 60 * 1000;
-const KEY_VERSION = 2;
 
 function getLoginAttempts() {
   try {
@@ -36,41 +29,6 @@ function saveLoginAttempts(attemptsMap) {
   } catch (e) {
     console.error("Could not write login attempts to localStorage:", e);
   }
-}
-
-function getKeyStore() {
-  try {
-    const data = localStorage.getItem("workforces_key_store");
-    return data ? JSON.parse(data) : { keys: [], currentKeyId: null };
-  } catch {
-    return { keys: [], currentKeyId: null };
-  }
-}
-
-function saveKeyStore(keyStore) {
-  try {
-    localStorage.setItem("workforces_key_store", JSON.stringify(keyStore));
-  } catch (e) {
-    console.error("Could not write key store to localStorage:", e);
-  }
-}
-
-async function generateAesKey() {
-  return await crypto.subtle.generateKey(
-    { name: AES_ALGORITHM, length: AES_KEY_LENGTH },
-    true,
-    ["encrypt", "decrypt"]
-  );
-}
-
-async function exportAesKey(key) {
-  const raw = await crypto.subtle.exportKey("raw", key);
-  return Array.from(new Uint8Array(raw)).map(b => b.toString(16).padStart(2, "0")).join("");
-}
-
-async function importAesKey(rawHex) {
-  const raw = hexToBytes(rawHex);
-  return await crypto.subtle.importKey("raw", raw, { name: AES_ALGORITHM }, true, ["encrypt", "decrypt"]);
 }
 
 async function deriveKeyFromPassword(password, salt) {
@@ -109,129 +67,13 @@ function hexToBytes(hex) {
   return bytes;
 }
 
-async function rotateEncryptionKeys() {
-  const keyStore = getKeyStore();
-  const now = Date.now();
-
-  const currentKey = keyStore.keys.find(k => k.id === keyStore.currentKeyId);
-  if (currentKey && (now - currentKey.createdAt) < KEY_ROTATION_INTERVAL_MS) {
-    return currentKey.id;
-  }
-
-  const newKey = await generateAesKey();
-  const newKeyRaw = await exportAesKey(newKey);
-  const newKeyId = "key_" + crypto.randomUUID();
-
-  keyStore.keys.push({
-    id: newKeyId,
-    value: newKeyRaw,
-    createdAt: now,
-    version: KEY_VERSION
-  });
-  keyStore.currentKeyId = newKeyId;
-
-  if (keyStore.keys.length > 10) {
-    const oldKeys = keyStore.keys.filter(k => k.id !== newKeyId);
-    oldKeys.sort((a, b) => a.createdAt - b.createdAt);
-    keyStore.keys = [keyStore.keys.find(k => k.id === newKeyId), ...oldKeys.slice(-9)];
-  }
-
-  saveKeyStore(keyStore);
-  return newKeyId;
+export async function hashPassword(password, salt) {
+  return await deriveKeyFromPassword(password, salt);
 }
 
-export async function getCurrentEncryptionKey() {
-  await rotateEncryptionKeys();
-  const keyStore = getKeyStore();
-  const currentKey = keyStore.keys.find(k => k.id === keyStore.currentKeyId);
-  if (!currentKey) throw new Error("No encryption key available");
-  return { key: await importAesKey(currentKey.value), keyId: currentKey.id };
-}
-
-export async function getEncryptionKeyById(keyId) {
-  const keyStore = getKeyStore();
-  const keyData = keyStore.keys.find(k => k.id === keyId);
-  if (!keyData) throw new Error(`Key not found: ${keyId}`);
-  return { key: await importAesKey(keyData.value), keyId: keyData.id };
-}
-
-export async function encryptData(plaintext, associatedData = "") {
-  const { key, keyId } = await getCurrentEncryptionKey();
-  const iv = crypto.getRandomValues(new Uint8Array(AES_IV_LENGTH));
-  const encoder = new TextEncoder();
-  const data = encoder.encode(plaintext);
-  const aad = encoder.encode(associatedData);
-
-  const ciphertext = await crypto.subtle.encrypt(
-    { name: AES_ALGORITHM, iv, additionalData: aad, tagLength: AES_TAG_LENGTH },
-    key,
-    data
-  );
-
-  const result = new Uint8Array(1 + AES_IV_LENGTH + ciphertext.byteLength);
-  result[0] = KEY_VERSION;
-  result.set(iv, 1);
-  new Uint8Array(ciphertext).forEach((b, i) => result[1 + AES_IV_LENGTH + i] = b);
-
-  return {
-    data: Array.from(result).map(b => b.toString(16).padStart(2, "0")).join(""),
-    keyId
-  };
-}
-
-export async function decryptData(encryptedHex, associatedData = "") {
-  const encryptedBytes = hexToBytes(encryptedHex);
-  if (encryptedBytes.length < 1 + AES_IV_LENGTH) {
-    throw new Error("Invalid encrypted data format");
-  }
-
-  const version = encryptedBytes[0];
-  const iv = encryptedBytes.slice(1, 1 + AES_IV_LENGTH);
-  const ciphertext = encryptedBytes.slice(1 + AES_IV_LENGTH);
-
-  let key;
-
-  if (version === KEY_VERSION) {
-    const keyStore = getKeyStore();
-    const currentKey = keyStore.keys.find(k => k.id === keyStore.currentKeyId);
-    if (currentKey) {
-      key = await importAesKey(currentKey.value);
-    }
-  } else {
-    const legacyKey = localStorage.getItem("workforces_legacy_encryption_key");
-    if (legacyKey) {
-      key = await importAesKey(legacyKey);
-    }
-  }
-
-  if (!key) {
-    throw new Error("Unable to locate decryption key");
-  }
-
-  const encoder = new TextEncoder();
-  const aad = encoder.encode(associatedData);
-
-  const decrypted = await crypto.subtle.decrypt(
-    { name: AES_ALGORITHM, iv, additionalData: aad, tagLength: AES_TAG_LENGTH },
-    key,
-    ciphertext
-  );
-
-  const decoder = new TextDecoder();
-  return decoder.decode(decrypted);
-}
-
-export async function reEncryptWithCurrentKey(encryptedHex, associatedData = "") {
-  const plaintext = await decryptData(encryptedHex, associatedData);
-  return await encryptData(plaintext, associatedData);
-}
-
-export async function sha256(text) {
-  const encoder = new TextEncoder();
-  const data = encoder.encode(text);
-  const hashBuffer = await crypto.subtle.digest("SHA-256", data);
-  const hashArray = Array.from(new Uint8Array(hashBuffer));
-  return hashArray.map(b => b.toString(16).padStart(2, "0")).join("");
+export async function verifyPassword(password, salt, storedHash) {
+  const computedHash = await hashPassword(password, salt);
+  return computedHash === storedHash;
 }
 
 export function generateSalt() {
@@ -289,6 +131,7 @@ let workerUrl = null;
 
 function getCryptoWorker() {
   if (cryptoWorker) return cryptoWorker;
+  if (typeof Worker === "undefined") return null;
 
   const workerCode = `
     self.onmessage = async (e) => {
@@ -310,7 +153,7 @@ function getCryptoWorker() {
           {
             name: "PBKDF2",
             salt: saltBuffer,
-            iterations: iterations || 600000,
+            iterations: iterations || 100000,
             hash: "SHA-256"
           },
           keyMaterial,
@@ -352,20 +195,34 @@ function getCryptoWorker() {
     cryptoWorker = null;
   }
 
-  window.addEventListener("beforeunload", () => {
-    if (workerUrl) {
-      URL.revokeObjectURL(workerUrl);
-    }
-  });
+  if (typeof window !== "undefined") {
+    window.addEventListener("beforeunload", () => {
+      if (workerUrl) {
+        URL.revokeObjectURL(workerUrl);
+      }
+    });
+  }
 
   return cryptoWorker;
+}
+
+export function terminateCryptoWorker() {
+  if (cryptoWorker) {
+    cryptoWorker.terminate();
+    cryptoWorker = null;
+  }
+  if (workerUrl) {
+    URL.revokeObjectURL(workerUrl);
+    workerUrl = null;
+  }
+  pendingCryptoResolves.clear();
 }
 
 async function hashPasswordMainThread(password, salt) {
   return await deriveKeyFromPassword(password, salt);
 }
 
-export async function hashPassword(password, salt) {
+export async function hashPasswordAsync(password, salt) {
   const worker = getCryptoWorker();
   if (!worker) {
     return hashPasswordMainThread(password, salt);
@@ -375,11 +232,6 @@ export async function hashPassword(password, salt) {
     pendingCryptoResolves.set(id, { resolve, reject });
     worker.postMessage({ id, password, salt, iterations: PBKDF2_ITERATIONS });
   });
-}
-
-export async function verifyPassword(password, salt, storedHash) {
-  const computedHash = await hashPassword(password, salt);
-  return computedHash === storedHash;
 }
 
 export function sortObjectKeys(obj) {
@@ -476,11 +328,5 @@ export const CRYPTO_CONFIG = {
   HMAC_KEY_LENGTH,
   SESSION_TTL_MS,
   MAX_LOGIN_ATTEMPTS,
-  LOGIN_LOCKOUT_MS,
-  AES_ALGORITHM,
-  AES_KEY_LENGTH,
-  AES_IV_LENGTH,
-  AES_TAG_LENGTH,
-  KEY_ROTATION_INTERVAL_MS,
-  KEY_VERSION
+  LOGIN_LOCKOUT_MS
 };

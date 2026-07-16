@@ -60,39 +60,39 @@ describe("E2E & Integration Flows", () => {
   });
 
   describe("State-Aware Professional Tax Calculations", () => {
-    it("calculates Karnataka PT correctly", () => {
-      expect(helpers.calculateProfessionalTax(12000, "Karnataka")).toBe(0);
-      expect(helpers.calculateProfessionalTax(18000, "Karnataka")).toBe(200);
-      expect(helpers.calculateProfessionalTax(100000, "Karnataka")).toBe(200);
+    it("calculates Karnataka PT correctly", async () => {
+      expect(await helpers.calculateProfessionalTax(12000, "Karnataka")).toBe(0);
+      expect(await helpers.calculateProfessionalTax(18000, "Karnataka")).toBe(200);
+      expect(await helpers.calculateProfessionalTax(100000, "Karnataka")).toBe(200);
     });
 
-    it("calculates Maharashtra PT correctly", () => {
-      expect(helpers.calculateProfessionalTax(6000, "Mumbai")).toBe(0);
-      expect(helpers.calculateProfessionalTax(9000, "Pune")).toBe(175);
+    it("calculates Maharashtra PT correctly", async () => {
+      expect(await helpers.calculateProfessionalTax(6000, "Mumbai")).toBe(0);
+      expect(await helpers.calculateProfessionalTax(9000, "Pune")).toBe(175);
       
       // Non-February month
       const originalGetMonth = Date.prototype.getMonth;
       Date.prototype.getMonth = () => 0; // January
-      expect(helpers.calculateProfessionalTax(12000, "Maharashtra")).toBe(200);
+      expect(await helpers.calculateProfessionalTax(12000, "Maharashtra")).toBe(200);
 
       // February month
       Date.prototype.getMonth = () => 1; // February
-      expect(helpers.calculateProfessionalTax(12000, "Maharashtra")).toBe(250);
+      expect(await helpers.calculateProfessionalTax(12000, "Maharashtra")).toBe(250);
       
       Date.prototype.getMonth = originalGetMonth;
     });
 
-    it("calculates Tamil Nadu PT correctly", () => {
-      expect(helpers.calculateProfessionalTax(10000, "Chennai")).toBe(0);
-      expect(helpers.calculateProfessionalTax(15000, "Tamil Nadu")).toBe(185);
-      expect(helpers.calculateProfessionalTax(25000, "Chennai")).toBe(195);
-      expect(helpers.calculateProfessionalTax(35000, "Tamil Nadu")).toBe(210);
-      expect(helpers.calculateProfessionalTax(50000, "Chennai")).toBe(235);
-      expect(helpers.calculateProfessionalTax(70000, "Tamil Nadu")).toBe(250);
+    it("calculates Tamil Nadu PT correctly", async () => {
+      expect(await helpers.calculateProfessionalTax(10000, "Chennai")).toBe(0);
+      expect(await helpers.calculateProfessionalTax(15000, "Tamil Nadu")).toBe(185);
+      expect(await helpers.calculateProfessionalTax(25000, "Chennai")).toBe(195);
+      expect(await helpers.calculateProfessionalTax(35000, "Tamil Nadu")).toBe(210);
+      expect(await helpers.calculateProfessionalTax(50000, "Chennai")).toBe(235);
+      expect(await helpers.calculateProfessionalTax(70000, "Tamil Nadu")).toBe(250);
     });
 
-    it("returns zero for Delhi", () => {
-      expect(helpers.calculateProfessionalTax(50000, "Delhi")).toBe(0);
+    it("returns zero for Delhi", async () => {
+      expect(await helpers.calculateProfessionalTax(50000, "Delhi")).toBe(0);
     });
   });
 

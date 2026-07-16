@@ -1,6 +1,7 @@
 node_modules/
 coverage/
 dist/
+data/
 *.log
 logs/
 .env
@@ -11,3 +12,4 @@ Thumbs.db
 .codex_write_probe.tmp
 *.tmp
 .vite/
+test-results/

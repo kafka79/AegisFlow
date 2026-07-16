@@ -56,6 +56,27 @@ jobs:
           files: ./coverage/lcov.info
           fail_ci_if_error: false
 
+  e2e:
+    name: Playwright API smoke tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install Playwright browser
+        run: npx playwright install chromium
+
+      - name: Run Playwright tests
+        run: npm run test:e2e
+
   security:
     name: Security Scan
     runs-on: ubuntu-latest
@@ -86,7 +107,7 @@ jobs:
 
   build:
     name: Build & Push Docker Image
-    needs: [lint, test, security]
+    needs: [lint, test, e2e, security]
     runs-on: ubuntu-latest
     if: github.event_name == 'push'
     steps:
@@ -124,7 +145,7 @@ jobs:
           cache-to: type=gha,mode=max
 
   deploy-staging:
-    name: Deploy to Staging
+    name: Docker stack smoke test (staging)
     needs: build
     runs-on: ubuntu-latest
     if: github.ref == 'refs/heads/develop'
@@ -132,7 +153,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Deploy demo stack to staging
+      - name: Smoke test demo Docker stack
         run: |
           docker compose up -d --build
           for i in 1 2 3 4 5 6 7 8 9 10; do
@@ -142,7 +163,7 @@ jobs:
           curl -fsS http://localhost:3000/metrics | grep workforces_app_up
 
   deploy-production:
-    name: Deploy to Production
+    name: Docker stack smoke test (main)
     needs: build
     runs-on: ubuntu-latest
     if: github.ref == 'refs/heads/main'
@@ -150,7 +171,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Deploy demo stack to production
+      - name: Smoke test demo Docker stack
         run: |
           docker compose up -d --build
           for i in 1 2 3 4 5 6 7 8 9 10; do

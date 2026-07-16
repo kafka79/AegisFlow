@@ -81,7 +81,7 @@ window.generateEmployeeId = generateEmployeeId;
 export function logAudit(action, entityType, entityId, changes, actorId, actorRole) {
   const auditLog = JSON.parse(localStorage.getItem("workforces_audit_log") || "[]");
   auditLog.unshift({
-    id: "AUD" + Date.now() + Math.random().toString(36).substr(2, 4),
+    id: "AUD_" + crypto.randomUUID().replace(/-/g, ""),
     timestamp: Date.now(),
     action,
     entityType,
@@ -114,52 +114,136 @@ export function getAuditLog(filters = {}) {
 }
 window.getAuditLog = getAuditLog;
 
-export function calculateProfessionalTax(monthlyGross, location = "") {
+function getDefaultPayrollConfig() {
+  return {
+    pfCeiling: 15000,
+    pfRate: 0.12,
+    esiCeiling: 21000,
+    esiEmployerRate: 0.0325,
+    esiEmployeeRate: 0.0075,
+    standardDeduction: 75000,
+    professionalTaxSlabs: {
+      maharashtra: [
+        { limit: 7500, rate: 0 },
+        { limit: 10000, rate: 175 },
+        { limit: null, rate: 200, febRate: 250 }
+      ],
+      tamil_nadu: [
+        { limit: 12000, rate: 0 },
+        { limit: 21000, rate: 185 },
+        { limit: 30000, rate: 195 },
+        { limit: 45000, rate: 210 },
+        { limit: 60000, rate: 235 },
+        { limit: null, rate: 250 }
+      ],
+      telangana: [
+        { limit: 15000, rate: 0 },
+        { limit: 20000, rate: 150 },
+        { limit: null, rate: 200 }
+      ],
+      delhi: [
+        { limit: null, rate: 0 }
+      ],
+      default: [
+        { limit: 15000, rate: 0 },
+        { limit: null, rate: 200 }
+      ]
+    },
+    tdsSlabs: [
+      { limit: 300000, rate: 0, base: 0 },
+      { limit: 600000, rate: 0.05, base: 0 },
+      { limit: 900000, rate: 0.10, base: 15000 },
+      { limit: 1200000, rate: 0.15, base: 45000 },
+      { limit: 1500000, rate: 0.20, base: 90000 },
+      { limit: null, rate: 0.30, base: 150000 }
+    ],
+    salaryStructure: {
+      basicPercent: 0.5,
+      hraPercentOfBasic: 0.4,
+      standardPercent: 0.1,
+      bonusPercentOfBasic: 0.15,
+      ltaPercentOfBasic: 0.0833
+    }
+  };
+}
+
+let payrollConfigCache = (() => {
+  try {
+    const cached = typeof localStorage !== "undefined" ? localStorage.getItem("payroll_config") : null;
+    return cached ? JSON.parse(cached) : getDefaultPayrollConfig();
+  } catch {
+    return getDefaultPayrollConfig();
+  }
+})();
+
+export function getPayrollConfigSync() {
+  if (!payrollConfigCache) payrollConfigCache = getDefaultPayrollConfig();
+  return payrollConfigCache;
+}
+
+export async function fetchAndCachePayrollConfig() {
+  try {
+    const { MockServer } = await import("./server.js");
+    const config = await MockServer.getPayrollConfig();
+    if (config) {
+      payrollConfigCache = config;
+      if (typeof localStorage !== "undefined") {
+        localStorage.setItem("payroll_config", JSON.stringify(config));
+      }
+    }
+  } catch (err) {
+    console.warn("[helpers] Failed to fetch payroll config from server, using local/default:", err);
+  }
+}
+
+function getLocationKey(location) {
   const loc = String(location).toLowerCase();
-  
-  if (loc.includes("maharashtra") || loc.includes("mumbai") || loc.includes("pune")) {
-    if (monthlyGross <= 7500) return 0;
-    if (monthlyGross <= 10000) return 175;
-    const isFeb = new Date().getMonth() === 1;
-    return isFeb ? 250 : 200;
+  if (loc.includes("maharashtra") || loc.includes("mumbai") || loc.includes("pune")) return "maharashtra";
+  if (loc.includes("tamil nadu") || loc.includes("chennai")) return "tamil_nadu";
+  if (loc.includes("telangana") || loc.includes("hyderabad")) return "telangana";
+  if (loc.includes("delhi")) return "delhi";
+  return "default";
+}
+
+function calculateProfessionalTaxFromSlabs(monthlyGross, slabs, isFebruary = false) {
+  for (const slab of slabs) {
+    if (slab.limit === null || monthlyGross <= slab.limit) {
+      if (isFebruary && slab.febRate !== undefined) {
+        return slab.febRate;
+      }
+      return slab.rate;
+    }
   }
-  
-  if (loc.includes("tamil nadu") || loc.includes("chennai")) {
-    if (monthlyGross <= 12000) return 0;
-    if (monthlyGross <= 21000) return 185;
-    if (monthlyGross <= 30000) return 195;
-    if (monthlyGross <= 45000) return 210;
-    if (monthlyGross <= 60000) return 235;
-    return 250;
+  const lastSlab = slabs[slabs.length - 1];
+  if (isFebruary && lastSlab?.febRate !== undefined) {
+    return lastSlab.febRate;
   }
-  
-  if (loc.includes("telangana") || loc.includes("hyderabad")) {
-    if (monthlyGross <= 15000) return 0;
-    if (monthlyGross <= 20000) return 150;
-    return 200;
-  }
-  
-  if (loc.includes("delhi")) {
-    return 0;
-  }
-  
-  // Default: Karnataka (Headquarters / general)
-  if (monthlyGross <= 15000) return 0;
-  return 200;
+  return lastSlab?.rate || 0;
+}
+
+export function calculateProfessionalTax(monthlyGross, location = "") {
+  const config = getPayrollConfigSync();
+  const locKey = getLocationKey(location);
+  const slabs = config.professionalTaxSlabs?.[locKey] || config.professionalTaxSlabs?.default || getDefaultPayrollConfig().professionalTaxSlabs.default;
+  const isFeb = new Date().getMonth() === 1;
+  return calculateProfessionalTaxFromSlabs(monthlyGross, slabs, isFeb);
 }
 window.calculateProfessionalTax = calculateProfessionalTax;
 
 export function calculateTDS(annualGross, empData = {}) {
-  const standardDeduction = 75000;
+  const config = getPayrollConfigSync();
+  const standardDeduction = config.standardDeduction ?? 75000;
   const taxableIncome = Math.max(0, annualGross - standardDeduction);
   
   let annualTax = 0;
-  if (taxableIncome <= 300000) annualTax = 0;
-  else if (taxableIncome <= 600000) annualTax = (taxableIncome - 300000) * 0.05;
-  else if (taxableIncome <= 900000) annualTax = 15000 + (taxableIncome - 600000) * 0.10;
-  else if (taxableIncome <= 1200000) annualTax = 45000 + (taxableIncome - 900000) * 0.15;
-  else if (taxableIncome <= 1500000) annualTax = 90000 + (taxableIncome - 1200000) * 0.20;
-  else annualTax = 150000 + (taxableIncome - 1500000) * 0.30;
+  const slabs = config.tdsSlabs || getDefaultPayrollConfig().tdsSlabs;
+  
+  for (const slab of slabs) {
+    if (slab.limit === null || taxableIncome <= slab.limit) {
+      annualTax = slab.base + (taxableIncome - (slabs[slabs.indexOf(slab) - 1]?.limit || 0)) * slab.rate;
+      break;
+    }
+  }
   
   const monthly = annualTax / 12;
   return { annual: annualTax, monthly };
@@ -167,20 +251,26 @@ export function calculateTDS(annualGross, empData = {}) {
 window.calculateTDS = calculateTDS;
 
 export function getSalaryBreakdown(wage, empData = {}) {
-  const basic = wage * 0.5;
-  const hra = basic * 0.4;
-  const standard = wage * 0.1;
-  const bonus = basic * 0.15;
-  const lta = basic * 0.0833;
+  const config = getPayrollConfigSync();
+  const salaryStructure = config.salaryStructure || getDefaultPayrollConfig().salaryStructure;
+  
+  const basic = wage * (salaryStructure.basicPercent ?? 0.5);
+  const hra = basic * (salaryStructure.hraPercentOfBasic ?? 0.4);
+  const standard = wage * (salaryStructure.standardPercent ?? 0.1);
+  const bonus = basic * (salaryStructure.bonusPercentOfBasic ?? 0.15);
+  const lta = basic * (salaryStructure.ltaPercentOfBasic ?? 0.0833);
   const fixed = wage - (basic + hra + standard + bonus + lta);
   
-  const pfCeiling = 15000;
-  const employerPf = Math.min(basic, pfCeiling) * 0.12;
-  const employeePf = Math.min(basic, pfCeiling) * 0.12;
+  const pfCeiling = config.pfCeiling ?? 15000;
+  const pfRate = config.pfRate ?? 0.12;
+  const employerPf = Math.min(basic, pfCeiling) * pfRate;
+  const employeePf = Math.min(basic, pfCeiling) * pfRate;
   
-  const esiCeiling = 21000;
-  const employerEsi = wage <= esiCeiling ? wage * 0.0325 : 0;
-  const employeeEsi = wage <= esiCeiling ? wage * 0.0075 : 0;
+  const esiCeiling = config.esiCeiling ?? 21000;
+  const esiEmployerRate = config.esiEmployerRate ?? 0.0325;
+  const esiEmployeeRate = config.esiEmployeeRate ?? 0.0075;
+  const employerEsi = wage <= esiCeiling ? wage * esiEmployerRate : 0;
+  const employeeEsi = wage <= esiCeiling ? wage * esiEmployeeRate : 0;
   
   const pt = calculateProfessionalTax(wage, empData.location || "");
   
@@ -189,7 +279,7 @@ export function getSalaryBreakdown(wage, empData = {}) {
     : 0;
   const gratuity = (basic * 0.0481) * yearsOfService;
   
-  const annualGross = wage * 12;
+  const annualGross = (empData.wage || wage) * 12;
   const tds = calculateTDS(annualGross, empData);
   
   const totalDeductions = employeePf + (employeeEsi || 0) + pt + (tds.monthly || 0);
@@ -217,3 +307,39 @@ export function getSalaryBreakdown(wage, empData = {}) {
   };
 }
 window.getSalaryBreakdown = getSalaryBreakdown;
+
+export function clearPayrollConfigCache() {
+  payrollConfigCache = null;
+}
+
+/**
+ * A tagged template literal for HTML that automatically escapes interpolated string values.
+ * This prevents XSS attacks when constructing HTML strings.
+ */
+export function html(strings, ...values) {
+  const escapeHTML = (str) => {
+    if (typeof str !== 'string') return str;
+    return str
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&#39;");
+  };
+
+  return strings.reduce((result, str, i) => {
+    const value = values[i - 1];
+    let safeValue = value;
+    if (Array.isArray(value)) {
+      safeValue = value.join(''); // Assume array elements are already safe (e.g. nested html`` calls)
+    } else if (value && value.__htmlSafe) {
+      safeValue = value.value; // Bypass for intentionally safe HTML
+    } else if (value !== null && value !== undefined) {
+      safeValue = escapeHTML(String(value));
+    } else {
+      safeValue = '';
+    }
+    return result + safeValue + str;
+  });
+}
+window.html = html;

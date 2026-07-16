@@ -1,5 +1,16 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import * as views from '../src/views.js';
 
+vi.mock('../src/views.js', () => ({
+  renderLoginView: vi.fn(),
+  renderSignupView: vi.fn(),
+  renderDashboardView: vi.fn(),
+  renderEmployeesView: vi.fn(),
+  renderProfileView: vi.fn(),
+  renderAttendanceView: vi.fn(),
+  renderTimeOffView: vi.fn(),
+  renderPayrollView: vi.fn(),
+}));
 describe('Renderer', () => {
   let patchAppDOM;
   let getCachedAvatar;
@@ -36,6 +47,8 @@ describe('Renderer', () => {
   afterEach(() => {
     vi.restoreAllMocks();
     document.body.innerHTML = '';
+    delete global.CSS;
+    delete global.navigator;
   });
 
   describe('patchAppDOM', () => {
@@ -154,7 +167,6 @@ describe('Renderer', () => {
       const first = document.getElementById('first');
       const last = document.getElementById('last');
       
-      // Simulate Shift+Tab from first
       const shiftTabEvent = new KeyboardEvent('keydown', { key: 'Tab', shiftKey: true });
       first.focus();
       modal.dispatchEvent(shiftTabEvent);
@@ -260,14 +272,24 @@ describe('Router', () => {
   let router;
   let originalPushState;
   let originalReplaceState;
+  let mockStore;
   
   beforeEach(async () => {
     vi.resetModules();
     window.history.replaceState(null, '', '/');
     document.head.innerHTML = '';
-    window.store = {
-      getCurrentUser: vi.fn(() => ({ id: 'ODIAD20260001', role: 'HR' }))
+    const { registerStore } = await import('../src/app-context.js');
+    mockStore = {
+      getCurrentUser: vi.fn(() => ({ id: 'ODIAD20260001', role: 'HR' })),
+      state: { 
+        employees: [], 
+        timeOff:[],
+        attendance: []
+      },
+      getEmployee: vi.fn((id) => ({ id, name: 'Test User' })),
+      getAttendanceToday: vi.fn(() => null),
     };
+    registerStore(mockStore);
     originalPushState = window.history.pushState.bind(window.history);
     originalReplaceState = window.history.replaceState.bind(window.history);
     vi.spyOn(window.history, 'pushState').mockImplementation((state, title, url) => {
@@ -279,12 +301,16 @@ describe('Router', () => {
 
     const routerModule = await import('../src/router.js');
     Router = routerModule.Router;
+    
     router = new Router();
   });
   
   afterEach(() => {
+    if (router && typeof router.destroy === 'function') {
+      router.destroy();
+    }
     window.history.replaceState(null, '', '/');
-    delete window.store;
+    mockStore = null;
     vi.restoreAllMocks();
   });
 
@@ -317,12 +343,13 @@ describe('Router', () => {
       router2.useHistoryApi = false;
       router2.navigate('dashboard');
       expect(window.location.hash).toBe('#dashboard');
+      router2.destroy();
     });
   });
 
   describe('Route Handling', () => {
     it('redirects to login when not authenticated', () => {
-      window.store.getCurrentUser.mockReturnValue(null);
+      mockStore.getCurrentUser.mockReturnValue(null);
       
       window.history.replaceState(null, '', '/dashboard');
       router.handleRoute();
@@ -334,7 +361,7 @@ describe('Router', () => {
     });
 
     it('redirects authenticated user away from login', () => {
-      window.store.getCurrentUser.mockReturnValue({ id: '1', role: 'Employee' });
+      mockStore.getCurrentUser.mockReturnValue({ id: '1', role: 'Employee' });
       
       window.history.replaceState(null, '', '/login');
       router.handleRoute();
@@ -346,30 +373,29 @@ describe('Router', () => {
     });
 
     it('renders correct view for route', () => {
-      window.renderDashboardView = vi.fn();
-      window.store.getCurrentUser.mockReturnValue({ id: '1', role: 'Employee' });
+      mockStore.getCurrentUser.mockReturnValue({ id: '1', role: 'Employee' });
       
       window.history.replaceState(null, '', '/dashboard');
       router.handleRoute();
       
-      expect(window.renderDashboardView).toHaveBeenCalled();
+      expect(views.renderDashboardView).toHaveBeenCalled();
     });
   });
 
   describe('Deep Linking', () => {
     it('parses params from URL', () => {
       window.history.replaceState(null, '', '/profile?id=123&tab=salary');
-      window.store.getCurrentUser.mockReturnValue({ id: '1', role: 'HR' });
-      window.renderProfileView = vi.fn();
+      mockStore.getCurrentUser.mockReturnValue({ id: '1', role: 'HR' });
+      mockStore.getEmployee.mockReturnValue({ id: '123', name: 'Test User' });
       
       router.handleRoute();
       
-      expect(window.renderProfileView).toHaveBeenCalledWith({ id: '123', tab: 'salary' });
+      expect(views.renderProfileView).toHaveBeenCalledWith({ id: '123', tab: 'salary' });
     });
 
     it('handles nested routes', () => {
       window.history.replaceState(null, '', '/employees/123');
-      window.store.getCurrentUser.mockReturnValue({ id: '1', role: 'HR' });
+      mockStore.getCurrentUser.mockReturnValue({ id: '1', role: 'HR' });
       
       expect(() => router.handleRoute()).not.toThrow();
       expect(window.location.pathname).toBe('/dashboard');

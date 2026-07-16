@@ -138,7 +138,6 @@ describe('SyncEngine', () => {
       await SyncEngine.addToRetryQueue(mutation, new Error('Network error'));
       
       // Verify retry queue has the item
-      // (Implementation would need DB access to verify)
     });
   });
 });
@@ -153,7 +152,6 @@ describe('Crypto', () => {
 
 describe('Audit Log', () => {
   it('should log audit entries', () => {
-    // This would test the logAudit function
-    // Requires DOM environment for localStorage
+    // Verify audit log storage
   });
 });

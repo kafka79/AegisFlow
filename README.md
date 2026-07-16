@@ -4,58 +4,72 @@ Offline-first HRMS **portfolio demo** for a **50–200 employee Indian SMB** HR 
 
 **Target user:** HR Admin at a small/medium company in India (single HR seat, occasional employee self-service).
 
-**Demo impact (portfolio context):**
-- Replaces a 4-sheet Excel workflow (employees, attendance, leave, payroll) with one offline-capable app
-- Exercises Indian payroll rules (state-wise Professional Tax, PF/ESI breakdown helpers)
-- Validated manually with a 3-person walkthrough (HR admin + 2 employees) and 89 automated tests
+## Product prioritization (MVP → demo extras)
 
-This is **not production HR software**. The mock backend in `src/server.js` is a separate IndexedDB namespace in the **same browser origin** — it demonstrates auth, RBAC, HMAC sessions, and sync behavior; it is not an isolated server.
+| Priority | Module | Why |
+|----------|--------|-----|
+| P0 | Employee records + auth/RBAC | Core HR identity; everything else hangs off this |
+| P0 | Attendance + leave | Daily HR workload for the target persona |
+| P1 | Payroll helpers (Indian PT/PF/TDS) | Differentiator for Indian SMB; demo calculations only |
+| P2 | Offline sync + conflict merge | Portfolio proof of distributed-thinking |
+| P3 | Documents, audit trail, Grafana | Demo depth — cut first if trimming scope |
+
+See [docs/P0-DEMO-SCOPE.md](docs/P0-DEMO-SCOPE.md) for a trimmed interview walkthrough.
+
+**Demo impact (portfolio context):**
+- Replaces a 4-sheet Excel workflow with one offline-capable app
+- **91 Vitest tests** + **Playwright e2e** (API + browser UI offline sync)
+- Manual multi-tab walkthrough documented below
+
+This is **not production HR software**. Passwords and records are demo-grade — do not market as a “secure HRMS”.
 
 ## Architecture
 
 ```text
-Browser
-  index.html
-  style.css
-  src/helpers.js       Payroll, dates, validation, audit helpers
-  src/merge.js         Shared per-field vector-clock merge
-  src/store.js         IndexedDB-backed client state
-  src/views.js         HRMS screens and form handlers
-  src/router.js        History/hash navigation
-  src/renderer.js      Sanitized DOM patching and focus helpers
-  src/sync.js          Offline queue and mock-server sync
-  src/crypto.js        PBKDF2, AES-GCM, HMAC session tokens (demo-grade)
-  src/server.js        Browser-local mock backend (IndexedDB)
-  workforces-overrides.js  Runtime orchestration and enhanced views
-
-server.js (root)       Static file server, /health, /metrics, /api/telemetry
+Browser (IndexedDB client cache + sync queue)
+  src/store.js, src/sync.js, src/views/*
+        │  fetch /api/*
+        ▼
+Node server (server.js)
+  backend/store.js    SQLite file persistence (data/workforces.db) — atomic transactions, WAL mode
+  backend/engine.js   Vector clock conflict resolution, Auth, HMAC signing
+  backend/routes.js   API endpoints for /api/sync and static file servingts
+  GET /metrics, POST /api/telemetry
 ```
+
+The browser keeps a local IndexedDB cache for offline UX; **authoritative auth, RBAC, and sync merge run on the Node backend**. After a successful sync, the client **reconciles** its employee cache from `GET /api/employees` (`reconcileClientCache` in `src/sync.js`).
+
+Sync is **HTTP-only** in this demo — no WebSocket transport.
 
 ## Running
 
 ```bash
 npm install
-npm run dev
-npm test
+npm run dev          # http://localhost:3000
+npm test             # Vitest unit + integration
+npm run test:e2e     # Playwright — see ports below
 ```
 
-Open `http://localhost:3000`.
+### Ports
 
-The first workspace registration must create an HR account. After that, new user creation requires an authenticated HR session.
+| Command | Port | Notes |
+|---------|------|-------|
+| `npm run dev` / `npm start` | **3000** | Default local development |
+| `npm run test:e2e` | **3010** | Playwright starts its own server via `playwright.config.js` with `WORKFORCES_MEMORY_DB=1` |
+
+Playwright e2e does **not** reuse your dev server on 3000 — it spins up an isolated instance on 3010.
 
 ## Multi-tab sync demo
 
-Prove offline conflict merge across clients (two browser tabs):
+### Local Multi-Tab Offline Demo
+1. Open http://localhost:3010/ in **Tab A** and **Tab B**.
+2. Go Offline in Tab A (Chrome DevTools -> Network -> Offline).
+3. In Tab A, edit an employee's phone number.
+4. In Tab B, edit the *same* employee's department.
+5. Go Online in Tab A. Watch the `cloud-sync-status` badge indicate sync status. 
+6. Both tabs will reconcile via Vector Clocks. No data is lost. Console telemetry shows `conflictCount` when merges occur.
 
-1. Start the app: `npm run dev` and open `http://localhost:3000` in **Tab A**.
-2. Register/log in as HR and open **Employees → John Doe**.
-3. Open the **same URL** in **Tab B** (same browser profile so IndexedDB is shared for the mock server).
-4. In Tab A, go offline (DevTools → Network → Offline). Edit John's **name** to `John Tab A`. Save.
-5. In Tab B, go offline. Edit John's **phone** to `+91 90000 00099`. Save.
-6. Bring both tabs **online**. Wait ~15s or trigger sync from the status indicator.
-7. Open John Doe again — **both fields** should be present. Check DevTools console for `conflictCount` in sync telemetry JSON.
-
-Cross-device sync would require a real backend; this demo validates merge logic and queue behavior inside one browser origin.
+Cross-device sync would need a hosted backend; this demo validates merge logic against the real `/api/sync` endpoint.
 
 ## Deployment
 
@@ -64,32 +78,32 @@ npm start
 docker compose up --build
 ```
 
-The Docker image runs the static server on port `3000` and exposes:
-- `GET /health` — liveness
-- `GET /metrics` — Prometheus text metrics (`http_requests_total`, `sync_operations_total`, …)
-- `POST /api/telemetry` — browser sync telemetry beacons (used by `src/sync.js`)
+Endpoints:
+- `GET /health`, `GET /metrics`, `POST /api/telemetry`
+- `POST /api/auth/login`, `POST /api/auth/register`, `GET /api/employees`, `POST /api/sync`
 
-Optional local observability (Prometheus + Grafana only — no log pipeline theater):
-
-```bash
-docker compose up --build
-# App: http://localhost:3000  |  Grafana: http://localhost:3001  |  Prometheus: http://localhost:9090
-```
-
-Grafana dashboards read Prometheus metrics scraped from the static server's `/metrics` endpoint and client telemetry posted to `/api/telemetry`.
+Optional observability: Prometheus + Grafana only (`docker compose up`).
 
 ## Security Notes
 
-- Passwords are stretched with PBKDF2 before storage in the browser-local mock backend.
-- Session tokens are HMAC-signed with rotation and include expiry plus CSRF token data.
-- Renderer output is sanitized before DOM insertion; `href`/`src` allow only http(s) and relative paths.
-- **All data lives in browser storage.** Anyone with DevTools access can read it. Use demo data only.
+- PBKDF2 + HMAC sessions on the server; client-side IndexedDB is a cache only.
+- Renderer sanitization; navigation uses `data-nav-route` / `data-wf-click` delegation (CSP without `'unsafe-inline'` scripts).
+- AES-GCM decrypt rejects corrupted ciphertext (auth tag validation).
+- **Demo data only** — anyone with server/browser access can read records.
 
 ## Tests
 
 ```bash
-npm test
+npm test                 # Vitest — run `npm test` for current count
+npm run test:e2e         # Playwright: api-conflict + browser-sync specs
 npm run test:coverage
 ```
 
-Coverage focuses on crypto, per-field merge (`tests/merge.test.js`), sync queue behavior, store persistence, renderer sanitization, routing, and mock-server auth/RBAC behavior.
+Key suites:
+- `tests/client-server-reconcile.test.js` — client cache matches server after sync
+- `tests/conflict-sync.integration.test.js`, `tests/merge.test.js`
+- `e2e/api-conflict.spec.js`, `e2e/browser-sync.spec.js`
+
+## Type checking
+
+JSDoc contracts in `src/api-types.js` and `backend/types.js` with `checkJs: true` in `jsconfig.json` (no TypeScript migration).

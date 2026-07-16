@@ -1,5 +1,4 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-
 const setOnline = (value) => {
   Object.defineProperty(global.navigator, 'onLine', {
     value,
@@ -27,7 +26,9 @@ const makeHr = () => ({
 describe('SyncEngine', () => {
   let SyncEngine;
   let MockServer;
+  let SyncTelemetry;
 
+  let mockStore;
   beforeEach(async () => {
     vi.resetModules();
     localStorage.clear();
@@ -38,10 +39,14 @@ describe('SyncEngine', () => {
     setOnline(false);
     global.fetch = vi.fn().mockResolvedValue({ ok: true });
     window.showToast = vi.fn();
-    window.store = {
+    const appContext = await import('../src/app-context.js');
+    const { registerStore } = appContext;
+    SyncTelemetry = appContext.SyncTelemetry;
+    mockStore = {
       ready: Promise.resolve(),
       state: { currentSession: null }
     };
+    registerStore(mockStore);
 
     ({ MockServer } = await import('../src/server.js'));
     await MockServer.init();
@@ -52,7 +57,7 @@ describe('SyncEngine', () => {
   afterEach(() => {
     vi.clearAllMocks();
     localStorage.clear();
-    delete window.store;
+    
   });
 
   describe('enqueue', () => {
@@ -112,7 +117,7 @@ describe('SyncEngine', () => {
     });
 
     it('stops retrying after max attempts and records telemetry', async () => {
-      const logSpy = vi.spyOn(window.SyncTelemetry, 'log');
+      const logSpy = vi.spyOn(SyncTelemetry, 'log');
 
       await SyncEngine.addToRetryQueue({
         id: 100,
@@ -138,17 +143,17 @@ describe('SyncEngine', () => {
 
     it('returns false when online without an active token', async () => {
       setOnline(true);
-      window.store.state.currentSession = null;
+      mockStore.state.currentSession = null;
 
       const result = await SyncEngine.sync();
 
       expect(result).toBe(false);
-      expect(window.SyncTelemetry.recentLogs[0].message).toMatch(/No active authenticated session/);
+      expect(SyncTelemetry.recentLogs[0].message).toMatch(/No active authenticated session/);
     });
 
     it('processes pending transactions with the live store session', async () => {
       const hrSession = await MockServer.registerUser(makeHr(), 'Password123!');
-      window.store.state.currentSession = {
+      mockStore.state.currentSession = {
         token: hrSession.token,
         csrfToken: hrSession.csrfToken
       };
@@ -170,7 +175,8 @@ describe('SyncEngine', () => {
 
       expect(result).toBe(true);
       expect(await SyncEngine.getQueueLength()).toBe(0);
-      expect(global.dbStores.employees.get('EMP001').name).toBe('Employee One');
+      const employees = await MockServer.getEmployees(hrSession.token);
+      expect(employees.find((emp) => emp.id === 'EMP001')?.name).toBe('Employee One');
       expect(global.dbStores.sync_meta.get('cursor').value).toBeGreaterThan(0);
     });
   });

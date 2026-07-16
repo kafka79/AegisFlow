@@ -61,7 +61,8 @@ describe('Store', () => {
     const storeModule = await import('../src/store.js');
     Store = storeModule.Store;
     DEFAULT_ADMIN = storeModule.DEFAULT_ADMIN;
-    storeInstance = window.store;
+    const appContext = await import('../src/app-context.js');
+    storeInstance = appContext.getStore();
     await storeInstance.ready;
     storeInstance.state.currentSession = {
       employeeId: DEFAULT_ADMIN.id,

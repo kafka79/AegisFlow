@@ -3,6 +3,8 @@ import { stat } from "node:fs/promises";
 import { createServer } from "node:http";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { handleApiRequest } from "./backend/routes.js";
+import { serverEngine, MAX_MESSAGE_SIZE, checkConnectionLimit, releaseConnection, checkRateLimitRequest } from "./backend/engine.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -38,11 +40,11 @@ const securityHeaders = {
   "Permissions-Policy": "camera=(), microphone=(), geolocation=()",
   "Content-Security-Policy": [
     "default-src 'self'",
-    "script-src 'self' 'unsafe-inline' blob:",
+    "script-src 'self' blob:",
     "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
     "font-src 'self' https://fonts.gstatic.com data:",
     "img-src 'self' data: blob:",
-    "connect-src 'self' ws: wss:",
+    "connect-src 'self'",
     "frame-ancestors 'none'"
   ].join("; ")
 };
@@ -125,14 +127,38 @@ async function resolveStaticFile(reqPath) {
 
 function readRequestBody(req) {
   return new Promise((resolve, reject) => {
+    let length = 0;
     const chunks = [];
-    req.on("data", (chunk) => chunks.push(chunk));
+    req.on("data", (chunk) => {
+      length += chunk.length;
+      if (length > MAX_MESSAGE_SIZE) {
+        req.destroy(new Error("Payload too large"));
+        return;
+      }
+      chunks.push(chunk);
+    });
     req.on("end", () => resolve(Buffer.concat(chunks).toString("utf8")));
     req.on("error", reject);
   });
 }
 
 const server = createServer(async (req, res) => {
+  const clientIp = req.socket.remoteAddress || "unknown";
+  
+  if (!checkConnectionLimit(clientIp)) {
+    sendJson(res, 503, { error: "Service unavailable" });
+    return;
+  }
+  
+  res.on("close", () => {
+    releaseConnection(clientIp);
+  });
+
+  if (!checkRateLimitRequest(clientIp)) {
+    sendJson(res, 429, { error: "Too many requests" });
+    return;
+  }
+
   const route = (req.url || "/").split("?")[0];
 
   try {
@@ -165,6 +191,11 @@ const server = createServer(async (req, res) => {
       res.writeHead(204, securityHeaders);
       res.end();
       return;
+    }
+
+    if (route.startsWith("/api/")) {
+      recordHttpRequest(req.method, route);
+      return handleApiRequest(req, res, securityHeaders);
     }
 
     if (req.method !== "GET" && req.method !== "HEAD") {
@@ -204,6 +235,7 @@ const server = createServer(async (req, res) => {
   }
 });
 
-server.listen(PORT, HOST, () => {
-  console.log(`WorkForces HRMS static server listening on http://${HOST}:${PORT}`);
+server.listen(PORT, HOST, async () => {
+  await serverEngine.init();
+  console.log(`WorkForces HRMS server listening on http://${HOST}:${PORT}`);
 });

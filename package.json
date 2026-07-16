@@ -9,11 +9,16 @@
     "format:check": "node tools/check-format.mjs",
     "test": "vitest run",
     "test:watch": "vitest",
-    "test:coverage": "vitest run --coverage"
+    "test:coverage": "vitest run --coverage",
+    "test:e2e": "playwright test"
   },
   "devDependencies": {
-    "vitest": "^2.0.0",
+    "@playwright/test": "^1.49.0",
     "@vitest/coverage-v8": "^2.0.0",
-    "jsdom": "^24.0.0"
+    "jsdom": "^24.0.0",
+    "vitest": "^2.0.0"
+  },
+  "dependencies": {
+    "better-sqlite3": "^12.11.1"
   }
 }

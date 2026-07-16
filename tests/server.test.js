@@ -65,7 +65,8 @@ describe('MockServer', () => {
       expect(result.employee.id).toBe('HR001');
       expect(result.token).toBeTruthy();
       expect(result.csrfToken).toBeTruthy();
-      expect(global.dbStores.users.get('HR001').email).toBe('hr@example.com');
+      const employees = await MockServer.getEmployees(result.token);
+      expect(employees.some((emp) => emp.id === 'HR001')).toBe(true);
     });
 
     it('authenticates a registered HR user and validates CSRF on sessions', async () => {
@@ -151,7 +152,8 @@ describe('MockServer', () => {
       }], hr.csrfToken);
 
       expect(hrSync.results).toEqual([{ id: 'sync-1', status: 'success' }]);
-      expect(global.dbStores.employees.get('EMP002').email).toBe('two@example.com');
+      const employees = await MockServer.getEmployees(hr.token);
+      expect(employees.find((emp) => emp.id === 'EMP002')?.email).toBe('two@example.com');
 
       const denied = await MockServer.syncTransactions(employee.token, [{
         id: 'sync-2',
@@ -199,38 +201,6 @@ describe('MockServer', () => {
       await expect(MockServer.deleteDocument(hr.token, 'doc-1', hr.csrfToken))
         .resolves.toEqual({ success: true });
       await expect(MockServer.getDocument(hr.token, 'doc-1')).resolves.toBeNull();
-    });
-  });
-
-  describe('WebSocket handling', () => {
-    const createWs = () => {
-      const handlers = {};
-      return {
-        handlers,
-        on: vi.fn((event, cb) => {
-          handlers[event] = cb;
-        }),
-        send: vi.fn(),
-        close: vi.fn()
-      };
-    };
-
-    it('requires the first WebSocket message to authenticate', async () => {
-      const ws = createWs();
-      await MockServer.handleWebSocketConnection(ws, { socket: { remoteAddress: '127.0.0.1' } });
-
-      await ws.handlers.message(Buffer.from(JSON.stringify({ type: 'ping' })));
-
-      expect(ws.close).toHaveBeenCalledWith(1008, 'First message must be auth');
-    });
-
-    it('rejects oversized WebSocket messages', async () => {
-      const ws = createWs();
-      await MockServer.handleWebSocketConnection(ws, { socket: { remoteAddress: '127.0.0.2' } });
-
-      await ws.handlers.message(Buffer.alloc(1024 * 1024 + 1));
-
-      expect(ws.close).toHaveBeenCalledWith(1009, 'Message too large');
     });
   });
 });

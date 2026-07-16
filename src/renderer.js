@@ -58,10 +58,8 @@ function isSafeUrl(value, attrName = "href") {
   if (raw.startsWith("#") || raw.startsWith("/") || raw.startsWith("./") || raw.startsWith("../")) return true;
   try {
     const url = new URL(raw, window.location.href);
-    if (attrName === "src") {
-      return url.protocol === "http:" || url.protocol === "https:";
-    }
-    return url.protocol === "http:" || url.protocol === "https:";
+    const safeProtocols = ["http:", "https:", "data:", "blob:"];
+    return safeProtocols.includes(url.protocol);
   } catch {
     return false;
   }

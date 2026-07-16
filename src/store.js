@@ -1,5 +1,7 @@
+import { getStore, getRouter } from './app-context.js';
 import { MockServer } from "./server.js";
 import { escapeHtml } from "./renderer.js";
+import { registerStore } from "./app-context.js";
 
 const STORE_DB_NAME = "workforces_store_db";
 const STORE_DB_VERSION = 1;
@@ -150,8 +152,13 @@ function initStoreDB() {
 function sanitizeForStorage(obj) {
   if (obj === null || obj === undefined) return obj;
   if (typeof obj === "string") {
+    if (window.DOMPurify) {
+      return window.DOMPurify.sanitize(obj, { ALLOWED_URI_REGEXP: /^(?:(?:(?:f|ht)tps?|mailto|tel|callto|cid|xmpp):|[^a-z]|[a-z+.\-]+(?:[^a-z+.\-:]|$))/i });
+    }
+    // Fallback if DOMPurify is not loaded
     return obj.replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, "")
-              .replace(/on\w+\s*=/gi, "data-on=");
+              .replace(/on\w+\s*=/gi, "data-on=")
+              .replace(/javascript:/gi, "about:blank");
   }
   if (Array.isArray(obj)) return obj.map(sanitizeForStorage);
   if (typeof obj === "object") {
@@ -443,5 +450,7 @@ export class Store {
 }
 
 window.Store = Store;
-window.store = new Store();
+const store = new Store();
+registerStore(store);
+// getStore() = store; removed
 window.escapeHtml = escapeHtml;

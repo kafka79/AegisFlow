@@ -3,6 +3,7 @@
  * Provides a floating unified developer panel in the bottom right corner of the screen.
  * Resolves the "Simulated SMTP" security flaw and provides real-time transaction sync audit logs.
  */
+import { SyncTelemetry } from "./app-context.js";
 
 // ponytail: persist emails in localStorage so they survive refreshes.
 const emails = JSON.parse(localStorage.getItem("workforces_mock_emails") || "[]");
@@ -87,7 +88,7 @@ function renderDevConsole() {
     // Telemetry tab UI
     const statusDotClass = networkOnline ? "status-dot online" : "status-dot offline";
     const statusText = networkOnline ? "Online" : "Offline";
-    const telemetry = window.SyncTelemetry || { successCount: 0, failureCount: 0, conflictCount: 0, recentLogs: [] };
+    const telemetry = SyncTelemetry || { successCount: 0, failureCount: 0, conflictCount: 0, recentLogs: [] };
     
     // Attempt to read current IndexedDB queue length asynchronously
     if (window.SyncEngine && typeof window.SyncEngine.getQueueLength === "function") {
@@ -185,14 +186,14 @@ window.closeDevConsole = function () {
 
 window.triggerManualSync = function() {
   if (window.SyncEngine && typeof window.SyncEngine.sync === "function") {
-    window.SyncTelemetry.log("Manual sync trigger requested by developer.");
+    SyncTelemetry.log("Manual sync trigger requested by developer.");
     window.SyncEngine.sync();
   }
 };
 
 window.clearTelemetryLogs = function() {
-  if (window.SyncTelemetry) {
-    window.SyncTelemetry.recentLogs = [];
+  if (SyncTelemetry) {
+    SyncTelemetry.recentLogs = [];
     renderDevConsole();
   }
 };
