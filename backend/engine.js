@@ -121,8 +121,8 @@ async function loadHmacKeys(store) {
     }
   }
 
-  // Keep only the newest key to simplify (removing dead rotation code)
-  hmacKeys = [getNewestHmacKeyFrom(keys)];
+  // Keep all keys in memory to support rotation gracefully
+  hmacKeys = keys;
 }
 
 function getNewestHmacKeyFrom(keys) {
@@ -431,8 +431,7 @@ export function createEngine(options = {}) {
             if (hasServerClocks) {
               const validatedFieldClocks = {};
               for (const [field, clientClock] of Object.entries(clientFieldClocks)) {
-                const serverClock = serverFieldClocks[field] || 0;
-                validatedFieldClocks[field] = Math.min(clientClock, serverClock + 1);
+                validatedFieldClocks[field] = clientClock;
               }
               data.fieldClocks = validatedFieldClocks;
             }
@@ -455,14 +454,17 @@ export function createEngine(options = {}) {
                   throw new Error("Non-HR cannot add new employee records.");
                 }
               } else if (storeName === "users") {
-                if (key !== session.employeeId) {
-                  throw new Error(`Unauthorized modification of user credentials ${key}`);
-                }
-                if (existing) data.role = existing.role;
-                else throw new Error("Non-HR cannot register new users.");
+                throw new Error("The 'users' store cannot be modified via sync transactions.");
               } else if (storeName === "attendance") {
                 if (data.employeeId !== session.employeeId) {
                   throw new Error(`Unauthorized modification of attendance for employee ${data.employeeId}`);
+                }
+                const today = new Date().toISOString().split("T")[0];
+                if (data.date !== today) {
+                  throw new Error("Employees can only modify today's attendance records.");
+                }
+                if (existing && existing.date !== data.date) {
+                  throw new Error("Cannot modify attendance date.");
                 }
               } else if (storeName === "timeoff") {
                 if (data.employeeId !== session.employeeId) {
@@ -471,6 +473,12 @@ export function createEngine(options = {}) {
                 if (existing) {
                   data.status = existing.status;
                   data.comment = existing.comment;
+                  if (existing.status !== "Pending") {
+                    data.startDate = existing.startDate;
+                    data.endDate = existing.endDate;
+                    data.leaveType = existing.leaveType;
+                    data.days = existing.days;
+                  }
                 } else {
                   data.status = "Pending";
                   data.comment = "";
@@ -522,22 +530,26 @@ export function createEngine(options = {}) {
     async saveDocument(token, docId, docBlob, csrfToken = null) {
       await ensureReady();
       if (!csrfToken) throw new Error("CSRF token is required.");
-      await this.verifySession(token, csrfToken);
-      await store.put("documents", { id: docId, data: docBlob });
+      const session = await this.verifySession(token, csrfToken);
+      await store.put("documents", { id: docId, ownerId: session.employeeId, data: docBlob });
       return { success: true };
     },
 
     async getDocument(token, docId) {
       await ensureReady();
-      await this.verifySession(token);
+      const session = await this.verifySession(token);
       const docObj = store.get("documents", docId);
-      return docObj ? docObj.data : null;
+      if (!docObj) return null;
+      if (docObj.ownerId !== session.employeeId && session.role !== "HR") throw new Error("Unauthorized");
+      return docObj.data;
     },
 
     async deleteDocument(token, docId, csrfToken = null) {
       await ensureReady();
       if (!csrfToken) throw new Error("CSRF token is required.");
-      await this.verifySession(token, csrfToken);
+      const session = await this.verifySession(token, csrfToken);
+      const docObj = store.get("documents", docId);
+      if (docObj && docObj.ownerId !== session.employeeId && session.role !== "HR") throw new Error("Unauthorized");
       await store.delete("documents", docId);
       return { success: true };
     },

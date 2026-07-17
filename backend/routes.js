@@ -50,7 +50,7 @@ export async function handleApiRequest(req, res, securityHeaders) {
   const url = new URL(req.url || "/", "http://localhost");
   const path = url.pathname;
   const token = getBearerToken(req);
-  const csrfToken = req.headers["x-csrf-token"] || null;
+  const csrfToken = req.headers["x-csrf-token"];
 
   try {
     if (req.method === "POST" && path === "/api/test/reset") {
@@ -66,7 +66,7 @@ export async function handleApiRequest(req, res, securityHeaders) {
 
     if (req.method === "POST" && path === "/api/auth/verify") {
       const body = await readJsonBody(req);
-      const result = await serverEngine.verifySession(body.token, body.csrfToken ?? null);
+      const result = await serverEngine.verifySession(body.token, body.csrfToken ?? csrfToken ?? null);
       return sendJson(res, 200, result, securityHeaders);
     }
 
@@ -87,6 +87,7 @@ export async function handleApiRequest(req, res, securityHeaders) {
     }
 
     if (req.method === "POST" && path === "/api/sync") {
+      if (!csrfToken) return sendJson(res, 403, { error: "CSRF token missing" }, securityHeaders);
       const body = await readJsonBody(req);
       const result = await serverEngine.syncTransactions(token, body.transactions, csrfToken);
       return sendJson(res, 200, result, securityHeaders);
@@ -111,6 +112,7 @@ export async function handleApiRequest(req, res, securityHeaders) {
     if (docMatch) {
       const docId = decodeURIComponent(docMatch[1]);
       if (req.method === "POST") {
+        if (!csrfToken) return sendJson(res, 403, { error: "CSRF token missing" }, securityHeaders);
         const body = await readJsonBody(req);
         await serverEngine.saveDocument(token, docId, body.data, csrfToken);
         return sendJson(res, 200, { success: true }, securityHeaders);
@@ -120,6 +122,7 @@ export async function handleApiRequest(req, res, securityHeaders) {
         return sendJson(res, 200, { data }, securityHeaders);
       }
       if (req.method === "DELETE") {
+        if (!csrfToken) return sendJson(res, 403, { error: "CSRF token missing" }, securityHeaders);
         await serverEngine.deleteDocument(token, docId, csrfToken);
         res.writeHead(204, securityHeaders);
         return res.end();

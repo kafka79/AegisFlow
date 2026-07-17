@@ -4,7 +4,7 @@ import { escapeHtml } from "./renderer.js";
 import { registerStore } from "./app-context.js";
 
 const STORE_DB_NAME = "workforces_store_db";
-const STORE_DB_VERSION = 1;
+const STORE_DB_VERSION = 2;
 let storeDb = null;
 
 export const DEFAULT_ADMIN = {
@@ -139,6 +139,18 @@ function initStoreDB() {
       if (!activeDb.objectStoreNames.contains("state")) {
         activeDb.createObjectStore("state", { keyPath: "key" });
       }
+      if (!activeDb.objectStoreNames.contains("employees")) {
+        activeDb.createObjectStore("employees", { keyPath: "id" });
+      }
+      if (!activeDb.objectStoreNames.contains("attendance")) {
+        activeDb.createObjectStore("attendance", { keyPath: "id" });
+      }
+      if (!activeDb.objectStoreNames.contains("timeOff")) {
+        activeDb.createObjectStore("timeOff", { keyPath: "id" });
+      }
+      if (!activeDb.objectStoreNames.contains("users")) {
+        activeDb.createObjectStore("users", { keyPath: "employeeId" });
+      }
       if (!activeDb.objectStoreNames.contains("audit_log")) {
         const auditStore = activeDb.createObjectStore("audit_log", { keyPath: "id", autoIncrement: true });
         auditStore.createIndex("timestamp", "timestamp", { unique: false });
@@ -219,14 +231,41 @@ export class Store {
   async loadState() {
     if (!storeDb) await this.initStore();
     return new Promise((resolve) => {
-      const tx = storeDb.transaction("state", "readonly");
-      const store = tx.objectStore("state");
-      const request = store.get("app_state");
-      request.onsuccess = () => {
-        this.state = request.result?.value || Store.createEmptyState();
+      const stores = ["state", "employees", "attendance", "timeOff", "users"];
+      const tx = storeDb.transaction(stores, "readonly");
+      
+      const stateReq = tx.objectStore("state").get("app_state");
+      const currentSessionReq = tx.objectStore("state").get("currentSession");
+      const leaveConfigReq = tx.objectStore("state").get("leaveConfig");
+      
+      const empReq = tx.objectStore("employees").getAll();
+      const attReq = tx.objectStore("attendance").getAll();
+      const timeOffReq = tx.objectStore("timeOff").getAll();
+      const usersReq = tx.objectStore("users").getAll();
+
+      tx.oncomplete = () => {
+        let loadedState = stateReq.result?.value;
+        if (loadedState) {
+          this.state = loadedState;
+          if (empReq.result?.length > 0) this.state.employees = empReq.result;
+          if (attReq.result?.length > 0) this.state.attendance = attReq.result;
+          if (timeOffReq.result?.length > 0) this.state.timeOff = timeOffReq.result;
+          if (usersReq.result?.length > 0) this.state.users = usersReq.result;
+          if (currentSessionReq.result) this.state.currentSession = currentSessionReq.result.value;
+          if (leaveConfigReq.result) this.state.leaveConfig = leaveConfigReq.result.value;
+        } else {
+          this.state = Store.createEmptyState();
+          this.state.employees = empReq.result || [];
+          this.state.attendance = attReq.result || [];
+          this.state.timeOff = timeOffReq.result || [];
+          this.state.users = usersReq.result || [];
+          if (currentSessionReq.result) this.state.currentSession = currentSessionReq.result.value;
+          if (leaveConfigReq.result) this.state.leaveConfig = leaveConfigReq.result.value;
+        }
         resolve();
       };
-      request.onerror = () => {
+      
+      tx.onerror = () => {
         this.state = Store.createEmptyState();
         resolve();
       };
@@ -247,10 +286,53 @@ export class Store {
     } catch (e) {
       console.warn("Could not mirror sync session to localStorage:", e);
     }
+    
     return new Promise((resolve, reject) => {
-      const tx = storeDb.transaction("state", "readwrite");
-      const store = tx.objectStore("state");
-      store.put({ key: "app_state", value: sanitized, updatedAt: Date.now() });
+      const tx = storeDb.transaction(["state", "employees", "attendance", "timeOff", "users"], "readwrite");
+      const stateStore = tx.objectStore("state");
+      stateStore.put({ key: "app_state", value: sanitized, updatedAt: Date.now() });
+      stateStore.put({ key: "currentSession", value: sanitized.currentSession });
+      stateStore.put({ key: "leaveConfig", value: sanitized.leaveConfig });
+      
+      const empStore = tx.objectStore("employees");
+      sanitized.employees.forEach(e => empStore.put(e));
+      const attStore = tx.objectStore("attendance");
+      sanitized.attendance.forEach(a => attStore.put(a));
+      const timeOffStore = tx.objectStore("timeOff");
+      sanitized.timeOff.forEach(t => timeOffStore.put(t));
+      const usersStore = tx.objectStore("users");
+      sanitized.users.forEach(u => usersStore.put(u));
+      
+      tx.oncomplete = () => resolve();
+      tx.onerror = (e) => reject(e.target.error);
+    });
+  }
+
+  async persistEmployee(emp) {
+    if (!storeDb) await this.initStore();
+    return new Promise((resolve, reject) => {
+      const tx = storeDb.transaction("employees", "readwrite");
+      tx.objectStore("employees").put(sanitizeForStorage(emp));
+      tx.oncomplete = () => resolve();
+      tx.onerror = (e) => reject(e.target.error);
+    });
+  }
+
+  async persistAttendance(att) {
+    if (!storeDb) await this.initStore();
+    return new Promise((resolve, reject) => {
+      const tx = storeDb.transaction("attendance", "readwrite");
+      tx.objectStore("attendance").put(sanitizeForStorage(att));
+      tx.oncomplete = () => resolve();
+      tx.onerror = (e) => reject(e.target.error);
+    });
+  }
+
+  async persistTimeOff(leave) {
+    if (!storeDb) await this.initStore();
+    return new Promise((resolve, reject) => {
+      const tx = storeDb.transaction("timeOff", "readwrite");
+      tx.objectStore("timeOff").put(sanitizeForStorage(leave));
       tx.oncomplete = () => resolve();
       tx.onerror = (e) => reject(e.target.error);
     });
@@ -276,7 +358,7 @@ export class Store {
         }
       }
       this.state.employees[idx] = { ...this.state.employees[idx], ...updatedFields };
-      this.saveState();
+      this.persistEmployee(this.state.employees[idx]);
       
       if (Object.keys(changes).length > 0) {
         window.logAudit?.("UPDATE", "employee", id, changes, actorId, actorRole);
@@ -306,7 +388,8 @@ export class Store {
 
     const serverEmployees = await MockServer.getEmployees(currentSession?.token || result.token);
     this.state.employees = serverEmployees;
-    await this.saveState();
+    await this.persistEmployee(emp); // Also fallback for now, maybe we should just saveState
+    await this.saveState(); // saveState since we got all employees from server
     
     window.logAudit?.("CREATE", "employee", generatedId, { 
       name: { old: null, new: emp.name },
@@ -343,7 +426,7 @@ export class Store {
     
     this.state.attendance.push(newRecord);
     this.updateEmployee(empId, { status: "Present" }, empId, "Employee");
-    this.saveState();
+    this.persistAttendance(newRecord);
     
     window.logAudit?.("CHECK_IN", "attendance", newRecord.id, {
       checkIn: { old: null, new: nowTime },
@@ -368,7 +451,7 @@ export class Store {
     record.workHours = hours;
     record.extraHours = hours > 8.00 ? parseFloat((hours - 8.00).toFixed(2)) : 0.00;
 
-    this.saveState();
+    this.persistAttendance(record);
     
     window.logAudit?.("CHECK_OUT", "attendance", record.id, {
       checkOut: { old: oldCheckOut, new: checkOutTime },
@@ -384,7 +467,7 @@ export class Store {
     leaveRequest.status = "Pending";
     leaveRequest.comment = "";
     this.state.timeOff.push(leaveRequest);
-    this.saveState();
+    this.persistTimeOff(leaveRequest);
     
     window.logAudit?.("CREATE", "timeoff", leaveRequest.id, {
       employeeId: { old: null, new: leaveRequest.employeeId },
@@ -442,7 +525,7 @@ export class Store {
         }, actorId, actorRole);
       }
       
-      this.saveState();
+      this.persistTimeOff(leave);
       return true;
     }
     return false;

@@ -78,15 +78,15 @@ describe('Store', () => {
 
   describe('State Persistence', () => {
     it('initializes with IndexedDB', () => {
-      expect(indexedDB.open).toHaveBeenCalledWith('workforces_store_db', 1);
+      expect(indexedDB.open).toHaveBeenCalledWith('workforces_store_db', 2);
       expect(global.dbStores.state.get('app_state')).toBeDefined();
     });
 
     it('loads state from IndexedDB', async () => {
       const seeded = Store.createEmptyState();
-      seeded.users = [{ employeeId: 'EMPX', email: 'x@example.com', role: 'Employee' }];
-      seeded.employees = [{ id: 'EMPX', name: 'Seed User', role: 'Employee' }];
       global.dbStores.state.set('app_state', { key: 'app_state', value: seeded });
+      global.dbStores.users.set('EMPX', { employeeId: 'EMPX', email: 'x@example.com', role: 'Employee' });
+      global.dbStores.employees.set('EMPX', { id: 'EMPX', name: 'Seed User', role: 'Employee' });
 
       const otherStore = new Store();
       await otherStore.ready;

@@ -46,6 +46,7 @@ const STORE_SCHEMAS = {
   )`,
   documents: `CREATE TABLE IF NOT EXISTS documents (
     id TEXT PRIMARY KEY,
+    ownerId TEXT NOT NULL,
     data BLOB NOT NULL,
     createdAt INTEGER NOT NULL
   )`,
@@ -300,6 +301,7 @@ class SqliteStore {
   constructor(filePath) {
     this.filePath = filePath;
     this.db = null;
+    this.tableColumns = {};
   }
 
   async init() {
@@ -311,8 +313,10 @@ class SqliteStore {
     this.db.pragma("synchronous = NORMAL");
     this.db.pragma("foreign_keys = ON");
 
-    for (const [, schema] of Object.entries(STORE_SCHEMAS)) {
+    for (const [storeName, schema] of Object.entries(STORE_SCHEMAS)) {
       this.db.exec(schema);
+      const columns = this.db.prepare(`PRAGMA table_info(${storeName})`).all();
+      this.tableColumns[storeName] = new Set(columns.map(c => c.name));
     }
 
     await this.seedIfEmpty();
@@ -394,19 +398,16 @@ class SqliteStore {
     const key = record[keyField];
     if (!key) throw new Error("Missing key path field.");
 
-    const validColumns = new Set();
-    for (const line of STORE_SCHEMAS[storeName].split('\n')) {
-      const trimmed = line.trim();
-      if (!trimmed || trimmed.toUpperCase().startsWith('CREATE') || trimmed.toUpperCase().startsWith('FOREIGN') || trimmed.startsWith(')')) continue;
-      validColumns.add(trimmed.split(' ')[0]);
-    }
+    const validColumns = this.tableColumns[storeName];
 
     const safeKeys = Object.keys(record).filter(k => k !== keyField && validColumns.has(k));
     const cols = safeKeys.join(", ");
     const placeholders = safeKeys.map(k => `@${k}`).join(", ");
+    const updates = safeKeys.map(k => `${k} = excluded.${k}`).join(", ");
+    
     const sql = cols 
-      ? `INSERT OR REPLACE INTO ${storeName} (${keyField}, ${cols}) VALUES (@${keyField}, ${placeholders})`
-      : `INSERT OR REPLACE INTO ${storeName} (${keyField}) VALUES (@${keyField})`;
+      ? `INSERT INTO ${storeName} (${keyField}, ${cols}) VALUES (@${keyField}, ${placeholders}) ON CONFLICT(${keyField}) DO UPDATE SET ${updates}`
+      : `INSERT INTO ${storeName} (${keyField}) VALUES (@${keyField}) ON CONFLICT(${keyField}) DO NOTHING`;
 
     const stmt = this.db.prepare(sql);
     const params = { [keyField]: key };

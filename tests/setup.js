@@ -27,71 +27,92 @@ global.indexedDB = {
         createObjectStore: vi.fn(),
         transaction: vi.fn((storeNames, mode) => {
           const names = Array.isArray(storeNames) ? storeNames : [storeNames];
+          let pendingRequests = 0;
           const tx = {
             objectStore: vi.fn((storeName) => {
               const storeMap = dbStores[storeName] || new Map();
               return {
                 add: vi.fn((item) => {
+                  pendingRequests++;
                   if (item.id === undefined) {
-                    // Simple auto-increment
                     const ids = Array.from(storeMap.keys()).filter(k => typeof k === 'number');
                     item.id = ids.length > 0 ? Math.max(...ids) + 1 : 1;
                   }
                   storeMap.set(item.id, item);
-                  setTimeout(() => tx.oncomplete?.(), 0);
                   const req = { result: item.id };
-                  setTimeout(() => req.onsuccess?.({ target: req }), 0);
+                  setTimeout(() => {
+                    req.onsuccess?.({ target: req });
+                    if (--pendingRequests === 0) setTimeout(() => tx.oncomplete?.(), 0);
+                  }, 0);
                   return req;
                 }),
                 put: vi.fn((item) => {
+                  pendingRequests++;
                   const key = storeName === "users"
                     ? item.employeeId
                     : (item.id ?? item.key ?? item.store ?? item.sequence);
                   storeMap.set(key, item);
-                  setTimeout(() => tx.oncomplete?.(), 0);
                   const req = { result: key };
-                  setTimeout(() => req.onsuccess?.({ target: req }), 0);
+                  setTimeout(() => {
+                    req.onsuccess?.({ target: req });
+                    if (--pendingRequests === 0) setTimeout(() => tx.oncomplete?.(), 0);
+                  }, 0);
                   return req;
                 }),
                 get: vi.fn((key) => {
+                  pendingRequests++;
                   const req = { result: storeMap.get(key) };
-                  setTimeout(() => tx.oncomplete?.(), 0);
-                  setTimeout(() => req.onsuccess?.({ target: req }), 0);
+                  setTimeout(() => {
+                    req.onsuccess?.({ target: req });
+                    if (--pendingRequests === 0) setTimeout(() => tx.oncomplete?.(), 0);
+                  }, 0);
                   return req;
                 }),
                 getAll: vi.fn(() => {
+                  pendingRequests++;
                   const req = { result: Array.from(storeMap.values()) };
-                  setTimeout(() => tx.oncomplete?.(), 0);
-                  setTimeout(() => req.onsuccess?.({ target: req }), 0);
+                  setTimeout(() => {
+                    req.onsuccess?.({ target: req });
+                    if (--pendingRequests === 0) setTimeout(() => tx.oncomplete?.(), 0);
+                  }, 0);
                   return req;
                 }),
                 delete: vi.fn((key) => {
+                  pendingRequests++;
                   storeMap.delete(key);
-                  setTimeout(() => tx.oncomplete?.(), 0);
                   const req = {};
-                  setTimeout(() => req.onsuccess?.({ target: req }), 0);
+                  setTimeout(() => {
+                    req.onsuccess?.({ target: req });
+                    if (--pendingRequests === 0) setTimeout(() => tx.oncomplete?.(), 0);
+                  }, 0);
                   return req;
                 }),
                 count: vi.fn(() => {
+                  pendingRequests++;
                   const req = { result: storeMap.size };
-                  setTimeout(() => tx.oncomplete?.(), 0);
-                  setTimeout(() => req.onsuccess?.({ target: req }), 0);
+                  setTimeout(() => {
+                    req.onsuccess?.({ target: req });
+                    if (--pendingRequests === 0) setTimeout(() => tx.oncomplete?.(), 0);
+                  }, 0);
                   return req;
                 }),
                 createIndex: vi.fn(() => ({
                   getAll: vi.fn(() => {
+                    pendingRequests++;
                     const req = { result: Array.from(storeMap.values()) };
-                    setTimeout(() => req.onsuccess?.({ target: req }), 0);
+                    setTimeout(() => {
+                      req.onsuccess?.({ target: req });
+                      if (--pendingRequests === 0) setTimeout(() => tx.oncomplete?.(), 0);
+                    }, 0);
                     return req;
                   }),
                   openCursor: vi.fn(() => {
+                    pendingRequests++;
                     const values = Array.from(storeMap.values());
                     let currentIndex = 0;
                     const req = {};
                     const cursor = {
-                      get value() {
-                        return values[currentIndex];
-                      },
+                      get value() { return values[currentIndex]; },
                       continue: vi.fn(() => {
                         currentIndex++;
                         if (currentIndex < values.length) {
@@ -102,29 +123,30 @@ global.indexedDB = {
                       })
                     };
                     setTimeout(() => {
-                      if (values.length > 0) {
-                        req.onsuccess?.({ target: { result: cursor } });
-                      } else {
-                        req.onsuccess?.({ target: { result: null } });
-                      }
+                      if (values.length > 0) req.onsuccess?.({ target: { result: cursor } });
+                      else req.onsuccess?.({ target: { result: null } });
+                      if (--pendingRequests === 0) setTimeout(() => tx.oncomplete?.(), 0);
                     }, 0);
                     return req;
                   })
                 })),
                 index: vi.fn(() => ({
                   getAll: vi.fn(() => {
+                    pendingRequests++;
                     const req = { result: Array.from(storeMap.values()) };
-                    setTimeout(() => req.onsuccess?.({ target: req }), 0);
+                    setTimeout(() => {
+                      req.onsuccess?.({ target: req });
+                      if (--pendingRequests === 0) setTimeout(() => tx.oncomplete?.(), 0);
+                    }, 0);
                     return req;
                   }),
                   openCursor: vi.fn(() => {
+                    pendingRequests++;
                     const values = Array.from(storeMap.values());
                     let currentIndex = 0;
                     const req = {};
                     const cursor = {
-                      get value() {
-                        return values[currentIndex];
-                      },
+                      get value() { return values[currentIndex]; },
                       continue: vi.fn(() => {
                         currentIndex++;
                         if (currentIndex < values.length) {
@@ -135,11 +157,9 @@ global.indexedDB = {
                       })
                     };
                     setTimeout(() => {
-                      if (values.length > 0) {
-                        req.onsuccess?.({ target: { result: cursor } });
-                      } else {
-                        req.onsuccess?.({ target: { result: null } });
-                      }
+                      if (values.length > 0) req.onsuccess?.({ target: { result: cursor } });
+                      else req.onsuccess?.({ target: { result: null } });
+                      if (--pendingRequests === 0) setTimeout(() => tx.oncomplete?.(), 0);
                     }, 0);
                     return req;
                   })
@@ -149,6 +169,12 @@ global.indexedDB = {
             oncomplete: null,
             onerror: null
           };
+          
+          // Also handle cases where a transaction is created but no requests are made
+          setTimeout(() => {
+            if (pendingRequests === 0) tx.oncomplete?.();
+          }, 0);
+          
           return tx;
         }),
         objectStoreNames: { contains: vi.fn(() => true) }

@@ -617,7 +617,14 @@ export const SyncEngine = {
       }
       
       for (const item of dueRetries) {
-        await this.enqueue(item.type, item.store, item.data, item.priority);
+        const { nextRetryAt, lastError, ...originalMutation } = item;
+        await new Promise((resolve, reject) => {
+          const tx = syncDb.transaction("queue", "readwrite");
+          const store = tx.objectStore("queue");
+          store.put(originalMutation);
+          tx.oncomplete = () => resolve();
+          tx.onerror = (e) => reject(e.target.error);
+        });
         await this.removeFromRetryQueue(item.id);
       }
       
