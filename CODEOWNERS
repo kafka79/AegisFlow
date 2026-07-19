@@ -1,0 +1,16 @@
+# Each line is a file pattern followed by one or more owners.
+# For a team context, replace @username with @org/team-name.
+
+* @primary-maintainer
+
+/backend/ @backend-maintainer
+/src/views/ @frontend-maintainer
+/tests/ @qa-maintainer
+
+# Security-sensitive paths require senior review
+/backend/engine.js @security-reviewer
+/backend/crypto.js @security-reviewer
+backend/encryption-worker.js @security-reviewer
+
+# ADR changes require architecture review
+/adr/ @architect
